@@ -53,6 +53,7 @@ import { ExifInspector } from '../core/detection/exif';
 import { vaultDB } from '../core/storage/db';
 import { WebAuthnManager, MasterKeySession } from '../core/crypto/webauthn';
 import { SyntheticEngine } from '../core/fpe';
+import { TelemetryBar } from './TelemetryBar';
 
 interface ScanStudioProps {
   session: MasterKeySession;
@@ -1464,6 +1465,16 @@ console.log("Starting secure daemon...");`;
 
   return (
     <div className="space-y-6">
+      {/* 🚀 Live Hardware & Zero-Egress Telemetry Bar */}
+      <TelemetryBar
+        hardwareInfo={aiHardwareInfo}
+        modelStatus={aiModelStatus}
+        scanLatencyMs={detection?.scanDurationMs}
+        detectedCount={detection?.detectedItems.length}
+        isScanning={isScanning}
+        fileName={currentFile?.name}
+      />
+
       {/* 🌟 Safety & Hardware Telemetry Bento Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
         <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all">
