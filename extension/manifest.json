@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "AegisGuard - Local AI Privacy Shield",
+  "version": "2.2.0",
+  "description": "100% on-device real-time PII detection, agentic redaction, and cryptography for any website.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AegisGuard Local Privacy Shield"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["lib/pdf.min.js", "content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/pdf.worker.min.js", "lib/pdf.min.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
