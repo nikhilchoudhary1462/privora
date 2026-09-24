@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AegisGuard - Local AI Privacy Shield",
+  "name": "Privora - Local AI Privacy Shield",
   "version": "2.2.0",
   "description": "100% on-device real-time PII detection, agentic redaction, and cryptography for any website.",
   "permissions": [
@@ -16,7 +16,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "AegisGuard Local Privacy Shield"
+    "default_title": "Privora Local Privacy Shield"
   },
   "content_scripts": [
     {

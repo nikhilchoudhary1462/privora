@@ -1,5 +1,5 @@
 /**
- * AegisGuard Manifest V3 Background Service Worker
+ * Privora Manifest V3 Background Service Worker
  * - Centralizes cross-tab audit log events and synchronizes extension security state.
  * - Monitors file downloads to detect when an encrypted document is saved and alerts for auto-restoration.
  */
@@ -54,7 +54,7 @@ if (chrome.downloads && chrome.downloads.onChanged) {
             );
 
             if (matched) {
-              console.log('AegisGuard: Downloaded file matched with active encryption record:', matched.fileName);
+              console.log('Privora: Downloaded file matched with active encryption record:', matched.fileName);
             }
           });
         }

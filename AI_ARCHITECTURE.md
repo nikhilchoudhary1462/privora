@@ -1,12 +1,12 @@
-# 🧠 AegisGuard: Comprehensive On-Device AI & Cryptographic Architecture
+# 🧠 Privora: Comprehensive On-Device AI & Cryptographic Architecture
 
-> **Authoritative Technical Guide to On-Device Machine Learning, Neural Networks, Computer Vision, and Local Orchestration in AegisGuard.**
+> **Authoritative Technical Guide to On-Device Machine Learning, Neural Networks, Computer Vision, and Local Orchestration in Privora.**
 
 ---
 
 ## 🌟 Executive Summary: Zero-Cloud Client-Side AI
 
-AegisGuard runs a **100% on-device, zero-cloud multi-stage AI & cryptographic pipeline**. Not a single byte of sensitive user documents, extracted text, biometric face crops, or cryptographic keys ever leaves the client's local machine.
+Privora runs a **100% on-device, zero-cloud multi-stage AI & cryptographic pipeline**. Not a single byte of sensitive user documents, extracted text, biometric face crops, or cryptographic keys ever leaves the client's local machine.
 
 ```mermaid
 graph TD
@@ -187,7 +187,7 @@ graph TD
 
 ## 🔒 Verification & Offline Testing Guide
 
-To prove that AegisGuard operates 100% on-device with zero cloud dependencies:
+To prove that Privora operates 100% on-device with zero cloud dependencies:
 
 1. **The Airplane Mode Test**:
    - Open [http://localhost:5173](http://localhost:5173) and scan one file (so model weights are cached).

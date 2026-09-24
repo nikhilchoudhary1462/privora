@@ -549,7 +549,7 @@ Do not give answers until the human attempts each question.
 
 # HYBRID ARCHITECTURE: DETERMINISTIC RULES + LOCAL ON-DEVICE MODEL
 
-AegisGuard uses a **hybrid decision architecture** combining authoritative deterministic rules with an on-device Small Language Model / Transformer:
+Privora uses a **hybrid decision architecture** combining authoritative deterministic rules with an on-device Small Language Model / Transformer:
 
 1. **Deterministic Rules for Reliability (Authoritative)**:
    - Verhoeff checksums, Luhn algorithm, regular expressions, and strict compliance policy matrices provide 100% deterministic, audit-verifiable outputs without stochastic hallucinations.

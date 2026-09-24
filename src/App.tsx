@@ -8,11 +8,12 @@ import { ChatAssistant } from './components/ChatAssistant';
 import { P2PShareModal } from './components/P2PShareModal';
 import { AuditDashboard } from './components/AuditDashboard';
 import { MasterKeyModal } from './components/MasterKeyModal';
+import { EnterpriseKycSimulator } from './components/EnterpriseKycSimulator';
 import { WebAuthnManager, MasterKeySession } from './core/crypto/webauthn';
 import { vaultDB } from './core/storage/db';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'landing' | 'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit'>('landing');
+  const [activeTab, setActiveTab] = useState<'landing' | 'scan' | 'enterprise' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit'>('landing');
   const [session, setSession] = useState<MasterKeySession>(WebAuthnManager.getSession());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [vaultFileCount, setVaultFileCount] = useState<number>(0);
@@ -69,6 +70,8 @@ export function App() {
             />
           )}
 
+          {activeTab === 'enterprise' && <EnterpriseKycSimulator />}
+
           {activeTab === 'vault' && (
             <VaultView
               session={session}
@@ -94,7 +97,23 @@ export function App() {
         </main>
       )}
 
-      {/* Master Key Biometric Auth Modal */}
+      {/* Modern Light Footer */}
+      <footer className="border-t border-black/5 py-4 px-6 text-center text-xs text-[#757575] bg-[#FAF9F6]/80 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-[#212529]">Privora v2.2</span>
+            <span className="text-black/20">·</span>
+            <span>100% On-Device AI Privacy & Cryptography</span>
+          </div>
+          <div className="flex items-center gap-3 font-mono text-[10px] text-[#757575]">
+            <span className="bg-[#E2E1E6] px-2 py-0.5 rounded-full border border-black/5">WebAssembly (WASM)</span>
+            <span className="bg-[#E2E1E6] px-2 py-0.5 rounded-full border border-black/5">Web Crypto AES-256</span>
+            <span className="bg-[#E2E1E6] px-2 py-0.5 rounded-full border border-black/5">WebAuthn PRF</span>
+          </div>
+        </div>
+      </footer>
+
+      {/* Master Key WebAuthn / Biometric Modal */}
       <MasterKeyModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}

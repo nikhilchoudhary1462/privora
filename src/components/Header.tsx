@@ -12,13 +12,14 @@ import {
   Fingerprint,
   WifiOff,
   Sparkles,
-  Home
+  Home,
+  Building2
 } from 'lucide-react';
 import { MasterKeySession } from '../core/crypto/webauthn';
 
 interface HeaderProps {
-  activeTab: 'landing' | 'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit';
-  setActiveTab: (tab: 'landing' | 'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit') => void;
+  activeTab: 'landing' | 'scan' | 'enterprise' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit';
+  setActiveTab: (tab: 'landing' | 'scan' | 'enterprise' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit') => void;
   session: MasterKeySession;
   onOpenAuthModal: () => void;
   onLockVault: () => void;
@@ -77,6 +78,21 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Cpu className="w-3.5 h-3.5 text-[#9C8DD4]" />
             Scan & Protect
+          </button>
+
+          <button
+            onClick={() => setActiveTab('enterprise')}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
+              activeTab === 'enterprise'
+                ? 'bg-white text-[#212529] font-semibold shadow-minimal'
+                : 'text-[#757575] hover:text-[#212529]'
+            }`}
+          >
+            <Building2 className="w-3.5 h-3.5 text-[#9C8DD4]" />
+            <span>Bank KYC</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[9px] font-mono font-bold bg-[#FAF9F6] text-[#9C8DD4] border border-[#9C8DD4]/30">
+              B2B
+            </span>
           </button>
 
           <button
@@ -191,6 +207,7 @@ export const Header: React.FC<HeaderProps> = ({
         {[
           { tab: 'landing' as const, label: 'Home' },
           { tab: 'scan' as const, label: 'Scan' },
+          { tab: 'enterprise' as const, label: 'Bank KYC' },
           { tab: 'vault' as const, label: `Vault (${vaultFileCount})` },
           { tab: 'policy' as const, label: 'Policy' },
           { tab: 'assistant' as const, label: 'Assistant' },

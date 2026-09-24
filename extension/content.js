@@ -1,5 +1,5 @@
 /**
- * AegisGuard Manifest V3 Real-Time Privacy Shield & Auto-Retrace Manager
+ * Privora Manifest V3 Real-Time Privacy Shield & Auto-Retrace Manager
  * - Pre-Upload Interception: Blocks raw document uploads on any website, blurs sensitive regions, with interactive corner handles, drag-to-move, and custom box drawing.
  * - Auto-Retrace on Download: Intercepts downloads of modified/compressed images, matches with local manifest, and patches unblurred slices back on!
  * - In-Page Floating Hub: Quick-retrace dropzone for instant manual unblurring of any downloaded file.
@@ -338,7 +338,7 @@
           <div style="background:#082f49; border:1px solid #0284c7; width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:17px;">🛡️</div>
           <div>
             <div style="display:flex; align-items:center; gap:6px;">
-              <strong style="font-size:13px; color:#f8fafc;">AegisGuard Privacy Shield</strong>
+              <strong style="font-size:13px; color:#f8fafc;">Privora Privacy Shield</strong>
               <span style="font-size:9px; background:#082f49; color:#38bdf8; border:1px solid #0369a1; padding:1px 6px; border-radius:9999px; font-family:monospace;">READY</span>
             </div>
             <p style="margin:2px 0 0; font-size:11px; color:#94a3b8;">
@@ -516,7 +516,7 @@
         <div style="background:#082f49; border:1px solid #0284c7; width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px;">🛡️</div>
         <div>
           <h3 style="margin:0; font-size:16px; font-weight:800; color:#f8fafc; display:flex; align-items:center; gap:8px;">
-            <span>AegisGuard Privacy Interception</span>
+            <span>Privora Privacy Interception</span>
             <span style="font-size:10px; background:#082f49; color:#38bdf8; border:1px solid #0369a1; padding:2px 8px; border-radius:9999px; font-family:monospace;">ACTIVE SHIELD</span>
           </h3>
           <p style="margin:2px 0 0; font-size:11px; color:#94a3b8;">
@@ -1829,7 +1829,7 @@
           // Adaptive Quality Estimation based on input compressed image bytes-per-pixel ratio
           const rawTargetQuality = estimateJpegQualityFromSize(imageBlob, patchCanvas.width, patchCanvas.height);
           const targetQuality = Math.min(0.92, Math.max(0.50, rawTargetQuality));
-          console.log(`[AegisGuard Retrace] Input: ${imageBlob.size} bytes (${patchCanvas.width}x${patchCanvas.height}), Chosen adaptive quality: ${targetQuality}`);
+          console.log(`[Privora Retrace] Input: ${imageBlob.size} bytes (${patchCanvas.width}x${patchCanvas.height}), Chosen adaptive quality: ${targetQuality}`);
 
           const outType = imageBlob.type || (fileName.match(/\.(jpe?g)$/i) ? 'image/jpeg' : (fileName.match(/\.png$/i) ? 'image/png' : 'image/jpeg'));
 
@@ -1840,7 +1840,7 @@
               return;
             }
 
-            console.log(`[AegisGuard Retrace] Output: ${restoredBlob.size} bytes (Delta vs compressed input: ${restoredBlob.size - imageBlob.size > 0 ? '+' : ''}${restoredBlob.size - imageBlob.size} bytes, Original: ${matched.originalFileSize || 'N/A'} bytes)`);
+            console.log(`[Privora Retrace] Output: ${restoredBlob.size} bytes (Delta vs compressed input: ${restoredBlob.size - imageBlob.size > 0 ? '+' : ''}${restoredBlob.size - imageBlob.size} bytes, Original: ${matched.originalFileSize || 'N/A'} bytes)`);
 
             resolve({
               blob: restoredBlob,
@@ -1910,7 +1910,7 @@
           if (restoredBlob && result) {
             const inKb = (result.inputSize / 1024).toFixed(1);
             const outKb = (result.restoredSize / 1024).toFixed(1);
-            showToast(`✨ AegisGuard: Retraced & restored unblurred regions — ${inKb}KB → ${outKb}KB on "${a.download}"!`);
+            showToast(`✨ Privora: Retraced & restored unblurred regions — ${inKb}KB → ${outKb}KB on "${a.download}"!`);
           }
         } catch (err) {
           target.dataset.aegisRestored = 'true';
@@ -1961,7 +1961,7 @@
           <div style="display:flex; align-items:center; gap:8px;">
             <span style="font-size:16px;">🛡️</span>
             <div>
-              <strong style="color:#38bdf8; display:block; font-size:11px;">AegisGuard Active</strong>
+              <strong style="color:#38bdf8; display:block; font-size:11px;">Privora Active</strong>
               <span style="color:#94a3b8; font-size:10px;">${manifests.length} Document(s) Protected</span>
             </div>
           </div>
@@ -1978,7 +1978,7 @@
           resetBtn.onclick = () => {
             chrome.storage.local.set({ aegis_active_manifests: [] }, () => {
               hub.style.display = 'none';
-              showToast('AegisGuard: Active protection session cleared.');
+              showToast('Privora: Active protection session cleared.');
             });
           };
         }
@@ -2009,9 +2009,9 @@
 
                 const inKb = result?.inputSize ? (result.inputSize / 1024).toFixed(1) : (file.size / 1024).toFixed(1);
                 const outKb = result?.restoredSize ? (result.restoredSize / 1024).toFixed(1) : (restoredBlob.size / 1024).toFixed(1);
-                showToast(`✨ AegisGuard: Retraced & restored unblurred regions — ${inKb}KB → ${outKb}KB on "${a.download}"!`);
+                showToast(`✨ Privora: Retraced & restored unblurred regions — ${inKb}KB → ${outKb}KB on "${a.download}"!`);
               } else {
-                alert('No matching AegisGuard encryption session found for this file.');
+                alert('No matching Privora encryption session found for this file.');
               }
             };
             input.click();
@@ -2136,7 +2136,7 @@
           redacted = redacted.split(h.value).join(`[REDACTED: ${h.type} ${mask}]`);
         });
         insertText(redacted);
-        showToast('AegisGuard: Masked sensitive text before inserting into webpage.');
+        showToast('Privora: Masked sensitive text before inserting into webpage.');
       };
     }
 
@@ -2206,7 +2206,7 @@
         <div style="background:#082f49; border:1px solid #0284c7; width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px;">🛡️</div>
         <div>
           <h3 style="margin:0; font-size:16px; font-weight:800; color:#f8fafc; display:flex; align-items:center; gap:8px;">
-            <span>AegisGuard Text Shield</span>
+            <span>Privora Text Shield</span>
             <span style="font-size:10px; background:#082f49; color:#38bdf8; border:1px solid #0369a1; padding:2px 8px; border-radius:9999px; font-family:monospace;">ACTIVE DEFENSE</span>
           </h3>
           <p style="margin:2px 0 0; font-size:11px; color:#94a3b8;">
@@ -2290,7 +2290,7 @@
       });
       insertText(redacted);
       overlay.remove();
-      showToast('AegisGuard: Masked sensitive text before inserting into webpage.');
+      showToast('Privora: Masked sensitive text before inserting into webpage.');
     };
 
     // Encrypt
@@ -2305,7 +2305,7 @@
       } catch (err) {}
       insertText(enc);
       overlay.remove();
-      showToast('AegisGuard: Encrypted text with AES-256-GCM.');
+      showToast('Privora: Encrypted text with AES-256-GCM.');
     };
 
     // Allow
@@ -2331,14 +2331,14 @@
 
       const hits = scanText(text);
       if (hits.length > 0) {
-        console.log(`[AegisGuard Shield] Intercepted paste with ${hits.length} PII items on ${window.location.hostname}:`, hits);
+        console.log(`[Privora Shield] Intercepted paste with ${hits.length} PII items on ${window.location.hostname}:`, hits);
         e.preventDefault();
         e.stopImmediatePropagation();
 
         showTextInterceptionPrompt(e.target, hits, text);
       }
     } catch (err) {
-      console.warn('[AegisGuard Shield] Paste intercept error:', err);
+      console.warn('[Privora Shield] Paste intercept error:', err);
     }
   }, true);
 
@@ -2477,7 +2477,7 @@
             }
           }
           removeWarning();
-          showToast('AegisGuard: Masked sensitive tokens inside prompt.');
+          showToast('Privora: Masked sensitive tokens inside prompt.');
         };
       }
 
@@ -2548,7 +2548,7 @@
   setTimeout(() => {
     updateFloatingHub();
     setupLiveTextInterception();
-    console.log(`[AegisGuard Shield] Active on ${window.location.hostname || 'page'}`);
+    console.log(`[Privora Shield] Active on ${window.location.hostname || 'page'}`);
   }, 800);
 
 })();
