@@ -1,10 +1,10 @@
 // Populate active manifests count from storage
 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-  chrome.storage.local.get(['aegis_active_manifests'], (res) => {
-    const manifests = res.aegis_active_manifests || [];
+  chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+    const manifests = res.aegis_active_manifests || res.aegis_encrypted_manifests || [];
     const countEl = document.getElementById('protected-count');
     if (countEl) {
-      countEl.textContent = `${manifests.length} Doc${manifests.length === 1 ? '' : 's'}`;
+      countEl.textContent = `${manifests.length} File${manifests.length === 1 ? '' : 's'}`;
     }
   });
 }

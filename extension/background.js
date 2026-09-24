@@ -30,14 +30,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_MANIFESTS') {
-    chrome.storage.local.get(['aegis_encrypted_manifests'], (res) => {
-      sendResponse({ manifests: res.aegis_encrypted_manifests || [] });
+    chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+      sendResponse({ manifests: res.aegis_active_manifests || res.aegis_encrypted_manifests || [] });
     });
     return true;
   }
 });
 
-// Monitor Completed Downloads for Automatic Vault Matching
+// Monitor Completed Downloads for Automatic Vault Matching & Tab Notification
 if (chrome.downloads && chrome.downloads.onChanged) {
   chrome.downloads.onChanged.addListener((delta) => {
     if (delta.state && delta.state.current === 'complete') {
@@ -46,15 +46,25 @@ if (chrome.downloads && chrome.downloads.onChanged) {
           const item = items[0];
           const fileName = item.filename ? item.filename.split(/[\/\\]/).pop() : '';
 
-          chrome.storage.local.get(['aegis_encrypted_manifests'], (res) => {
-            const manifests = res.aegis_encrypted_manifests || [];
-            const matched = manifests.find(m => 
-              fileName.includes(m.fileName.replace(/\.[^/.]+$/, '')) || 
-              m.fileName.includes(fileName.replace(/\.[^/.]+$/, ''))
-            );
+          chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+            const manifests = [...(res.aegis_active_manifests || []), ...(res.aegis_encrypted_manifests || [])];
+            const matched = manifests.find(m => {
+              const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
+              const fBase = fileName.replace(/\.[^/.]+$/, '').toLowerCase();
+              return mBase && (fBase.includes(mBase) || mBase.includes(fBase));
+            });
 
             if (matched) {
-              console.log('Privora: Downloaded file matched with active encryption record:', matched.fileName);
+              console.log('[Privora] Downloaded file matched with active encryption record:', matched.fileName);
+              chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (tabs && tabs[0] && tabs[0].id) {
+                  chrome.tabs.sendMessage(tabs[0].id, {
+                    type: 'PRIVORA_DOWNLOAD_MATCHED',
+                    fileName,
+                    manifest: matched,
+                  }).catch(() => {});
+                }
+              });
             }
           });
         }

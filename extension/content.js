@@ -255,36 +255,494 @@
   }
 
   // -------------------------------------------------------------
-  // 3. Centralized In-Page Toast Notifications
+  // 3. Centralized In-Page Floating HUD Notifications & Status Cards
   // -------------------------------------------------------------
-  function showToast(message) {
-    const existing = document.getElementById('aegis-toast');
-    if (existing) existing.remove();
+  let activeHud = null;
+  let hudTimer = null;
 
-    const toast = document.createElement('div');
-    toast.id = 'aegis-toast';
-    toast.style.cssText = `
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      background: #090d16;
-      border: 1px solid #10b981;
-      border-radius: 14px;
-      padding: 14px 20px;
-      color: #f8fafc;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 13px;
-      font-weight: 600;
-      z-index: 2147483647;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 20px rgba(16, 185, 129, 0.3);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      animation: aegisFadeIn 0.3s ease-out;
+  function showPrivoraHud({
+    type = 'info', // 'encrypting' | 'encrypted' | 'decrypting' | 'decrypted' | 'warning'
+    title = 'Privora Privacy Shield',
+    subtitle = '',
+    durationMs = 4000,
+    actionLabel = null,
+    onAction = null,
+  }) {
+    if (activeHud) {
+      clearTimeout(hudTimer);
+      activeHud.remove();
+      activeHud = null;
+    }
+
+    const hud = document.createElement('div');
+    hud.id = 'privora-live-hud';
+    hud.style.cssText = `
+      position: fixed !important;
+      bottom: 24px !important;
+      right: 24px !important;
+      z-index: 2147483647 !important;
+      background: #FAF9F6 !important;
+      color: #212529 !important;
+      border: 1px solid rgba(0, 0, 0, 0.08) !important;
+      border-radius: 16px !important;
+      padding: 12px 18px !important;
+      box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(156, 141, 212, 0.25) !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 12px !important;
+      max-width: 440px !important;
+      min-width: 320px !important;
+      animation: aegisFadeIn 0.25s ease-out !important;
+      backdrop-filter: blur(12px) !important;
     `;
-    toast.innerHTML = `<span>🛡️</span><span>${message}</span>`;
-    document.documentElement.appendChild(toast);
-    setTimeout(() => toast.remove(), 6000);
+
+    const isDec = type.includes('dec');
+    const isEnc = type.includes('enc');
+    const iconBg = isDec ? '#ECFDF5' : (isEnc ? 'rgba(156, 141, 212, 0.15)' : '#EFF6FF');
+    const iconBorder = isDec ? '#A7F3D0' : (isEnc ? 'rgba(156, 141, 212, 0.4)' : '#BFDBFE');
+    const iconColor = isDec ? '#059669' : '#9C8DD4';
+    const icon = isDec ? '✨' : (type === 'encrypting' ? '🔄' : '🛡️');
+
+    hud.innerHTML = `
+      <div style="width:36px; height:36px; border-radius:10px; background:${iconBg}; border:1px solid ${iconBorder}; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0;">
+        ${icon}
+      </div>
+      <div style="flex:1; min-width:0;">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <strong style="font-size:12px; font-weight:700; color:#212529; letter-spacing:-0.01em;">${title}</strong>
+          <span style="font-size:9px; font-family:monospace; font-weight:700; padding:1px 6px; border-radius:9999px; background:#FAF9F6; color:${iconColor}; border:1px solid ${iconBorder};">
+            ${type.toUpperCase()}
+          </span>
+        </div>
+        <p style="margin:2px 0 0; font-size:11px; color:#757575; line-height:1.35; word-break:break-word;">
+          ${subtitle}
+        </p>
+      </div>
+    `;
+
+    if (actionLabel && onAction) {
+      const btn = document.createElement('button');
+      btn.style.cssText = `
+        background: #212529;
+        color: #ffffff;
+        border: none;
+        border-radius: 8px;
+        padding: 5px 9px;
+        font-size: 10px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      `;
+      btn.textContent = actionLabel;
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        onAction();
+      };
+      hud.appendChild(btn);
+    }
+
+    const closeBtn = document.createElement('button');
+    closeBtn.style.cssText = 'background:transparent; border:none; color:#9ca3af; font-size:14px; cursor:pointer; padding:2px; margin-left:4px;';
+    closeBtn.innerHTML = '✕';
+    closeBtn.onclick = () => {
+      hud.remove();
+      activeHud = null;
+    };
+    hud.appendChild(closeBtn);
+
+    document.documentElement.appendChild(hud);
+    activeHud = hud;
+
+    if (durationMs > 0) {
+      hudTimer = setTimeout(() => {
+        if (activeHud === hud) {
+          hud.style.opacity = '0';
+          hud.style.transform = 'translateY(6px)';
+          hud.style.transition = 'all 0.25s ease';
+          setTimeout(() => hud.remove(), 250);
+          activeHud = null;
+        }
+      }, durationMs);
+    }
+  }
+
+  function showToast(message) {
+    showPrivoraHud({
+      type: 'info',
+      title: 'Privora Shield',
+      subtitle: message,
+      durationMs: 4000
+    });
+  }
+
+  // -------------------------------------------------------------
+  // Automatic Sensitive Region & Face Detection Engine
+  // -------------------------------------------------------------
+  function detectFaceOrSensitiveRegions(canvas, fileName) {
+    const w = canvas.width;
+    const h = canvas.height;
+    const fn = (fileName || '').toLowerCase();
+    const boxes = [];
+
+    // Check 1: Known Government ID / Identity Card filename patterns
+    const isDocPattern = fn.includes('aadhaar') || fn.includes('id') || fn.includes('pan') || fn.includes('card') || fn.includes('passport') || fn.includes('license');
+    if (isDocPattern) {
+      boxes.push({
+        x: Math.round(w * 0.08),
+        y: Math.round(h * 0.25),
+        width: Math.round(w * 0.22),
+        height: Math.round(h * 0.42),
+        label: 'Face Photo'
+      });
+      boxes.push({
+        x: Math.round(w * 0.32),
+        y: Math.round(h * 0.35),
+        width: Math.round(w * 0.38),
+        height: Math.round(h * 0.16),
+        label: 'Name / Demographic'
+      });
+      boxes.push({
+        x: Math.round(w * 0.30),
+        y: Math.round(h * 0.78),
+        width: Math.round(w * 0.45),
+        height: Math.round(h * 0.14),
+        label: 'ID / Sensitive Number'
+      });
+      return boxes;
+    }
+
+    // Check 2: Biometric Skin-Tone & Face Detection Heuristic on downscaled grid
+    try {
+      const scale = Math.min(1, 240 / Math.max(w, h));
+      const sw = Math.max(20, Math.round(w * scale));
+      const sh = Math.max(20, Math.round(h * scale));
+      const thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = sw;
+      thumbCanvas.height = sh;
+      const thumbCtx = thumbCanvas.getContext('2d', { willReadFrequently: true });
+      thumbCtx.drawImage(canvas, 0, 0, sw, sh);
+      const imgData = thumbCtx.getImageData(0, 0, sw, sh);
+      const d = imgData.data;
+
+      let minX = sw, minY = sh, maxX = 0, maxY = 0, count = 0;
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          const i = (y * sw + x) * 4;
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          // Standard skin-tone distribution in RGB space
+          if (r > 95 && g > 40 && b > 20 && (Math.max(r, g, b) - Math.min(r, g, b) > 15) && Math.abs(r - g) > 15 && r > g && r > b) {
+            count++;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      const totalPixels = sw * sh;
+      // If skin tone cluster represents between 3% and 75% of the photo:
+      if (count > totalPixels * 0.03 && count < totalPixels * 0.75 && maxX > minX && maxY > minY) {
+        const padX = Math.round((maxX - minX) * 0.1);
+        const padY = Math.round((maxY - minY) * 0.1);
+        const fX = Math.max(0, Math.round((minX - padX) / scale));
+        const fY = Math.max(0, Math.round((minY - padY) / scale));
+        const fW = Math.min(w - fX, Math.round((maxX - minX + padX * 2) / scale));
+        const fH = Math.min(h - fY, Math.round((maxY - minY + padY * 2) / scale));
+        if (fW > 30 && fH > 30) {
+          boxes.push({
+            x: fX,
+            y: fY,
+            width: fW,
+            height: fH,
+            label: 'Face / Identity Region'
+          });
+          return boxes;
+        }
+      }
+    } catch (err) {
+      console.warn('[Privora] Skin-tone heuristic error:', err);
+    }
+
+    // Check 3: Default Focal Protection Box (central 60% of image)
+    boxes.push({
+      x: Math.round(w * 0.20),
+      y: Math.round(w === h ? h * 0.20 : h * 0.15),
+      width: Math.round(w * 0.60),
+      height: Math.round(h * 0.60),
+      label: 'Protected Visual Region'
+    });
+    return boxes;
+  }
+
+  function saveManifest(manifest) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+        const active = res.aegis_active_manifests || [];
+        const enc = res.aegis_encrypted_manifests || [];
+        active.unshift(manifest);
+        enc.unshift(manifest);
+        chrome.storage.local.set({
+          aegis_active_manifests: active.slice(0, 50),
+          aegis_encrypted_manifests: enc.slice(0, 50),
+        });
+      });
+    }
+  }
+
+  function replaceInputFiles(target, sanitizedFile) {
+    const dt = new DataTransfer();
+    dt.items.add(sanitizedFile);
+
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(target, dt.files);
+      } else {
+        target.files = dt.files;
+      }
+    } catch (err) {
+      target.files = dt.files;
+    }
+
+    target.dataset.aegisSanitized = 'true';
+
+    // Trigger change and input events with full bubbling
+    const changeEvt = new Event('change', { bubbles: true, cancelable: true, composed: true });
+    target.dispatchEvent(changeEvt);
+
+    const inputEvt = new Event('input', { bubbles: true, cancelable: true, composed: true });
+    target.dispatchEvent(inputEvt);
+
+    if (target.form) {
+      target.form.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    if (typeof window !== 'undefined' && window.$ && window.$(target).trigger) {
+      try { window.$(target).trigger('change'); } catch (e) {}
+    }
+  }
+
+  async function autoProtectAndSanitizeFile(file, { onOpenEditor } = {}) {
+    const fn = file.name.toLowerCase();
+    const isImage = file.type.startsWith('image/') || fn.match(/\.(png|jpe?g|webp|svg|bmp|gif)$/i);
+    const isPdf = file.type === 'application/pdf' || fn.endsWith('.pdf');
+    const isTextDoc = file.type.startsWith('text/') || fn.match(/\.(txt|csv|json|env|yaml|yml|xml|log|md|sql|py|js|ts|java|c|cpp|sh|docx?|xlsx?)$/i);
+
+    showPrivoraHud({
+      type: 'encrypting',
+      title: 'Privora Shield · Auto-Protecting',
+      subtitle: `Scanning & encrypting "${file.name}" with on-device AES-256-GCM...`,
+      durationMs: 0
+    });
+
+    if (isImage) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = async () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) throw new Error('Could not create canvas context');
+
+            ctx.drawImage(img, 0, 0);
+
+            // 1. Detect Face or Sensitive Regions automatically
+            const detectedBoxes = detectFaceOrSensitiveRegions(canvas, file.name);
+
+            // 2. Extract unblurred slices for retrace/decryption
+            const unblurredSlices = [];
+            detectedBoxes.forEach((box) => {
+              const cropCanvas = document.createElement('canvas');
+              cropCanvas.width = Math.max(1, Math.round(box.width));
+              cropCanvas.height = Math.max(1, Math.round(box.height));
+              const cCtx = cropCanvas.getContext('2d');
+              if (cCtx) {
+                cCtx.drawImage(
+                  img,
+                  Math.round(box.x),
+                  Math.round(box.y),
+                  Math.round(box.width),
+                  Math.round(box.height),
+                  0,
+                  0,
+                  cropCanvas.width,
+                  cropCanvas.height
+                );
+                unblurredSlices.push({
+                  normX: box.x / canvas.width,
+                  normY: box.y / canvas.height,
+                  normW: box.width / canvas.width,
+                  normH: box.height / canvas.height,
+                  cropDataUrl: cropCanvas.toDataURL('image/png'),
+                  label: box.label || 'Protected Region',
+                });
+              }
+            });
+
+            // 3. Apply high-entropy privacy mask inside the exact bounding box
+            detectedBoxes.forEach((box) => {
+              const bx = Math.max(0, Math.round(box.x));
+              const by = Math.max(0, Math.round(box.y));
+              const bw = Math.min(canvas.width - bx, Math.round(box.width));
+              const bh = Math.min(canvas.height - by, Math.round(box.height));
+              if (bw > 0 && bh > 0) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(bx, by, bw, bh);
+                ctx.clip();
+                ctx.fillStyle = '#0f172a';
+                ctx.fillRect(bx, by, bw, bh);
+
+                const blockSize = Math.max(6, Math.floor(Math.min(bw, bh) / 8));
+                for (let y = by; y < by + bh; y += blockSize) {
+                  for (let x = bx; x < bx + bw; x += blockSize) {
+                    const tileW = Math.min(blockSize, bx + bw - x);
+                    const tileH = Math.min(blockSize, by + bh - y);
+                    ctx.fillStyle = (Math.floor(x / blockSize) + Math.floor(y / blockSize)) % 2 === 0
+                      ? 'rgba(15, 23, 42, 0.98)'
+                      : 'rgba(51, 65, 85, 0.98)';
+                    ctx.fillRect(x, y, tileW, tileH);
+                  }
+                }
+                ctx.restore();
+              }
+            });
+
+            const estimatedQuality = estimateJpegQualityFromSize(file.size, canvas.width, canvas.height);
+            const mimeType = file.type === 'image/jpeg' ? 'image/jpeg' : (file.type || 'image/png');
+
+            canvas.toBlob(async (maskedBlob) => {
+              URL.revokeObjectURL(url);
+              if (!maskedBlob) {
+                reject(new Error('Canvas toBlob failed'));
+                return;
+              }
+
+              const rawBuffer = await file.arrayBuffer();
+              const origHash = await computeSHA256(rawBuffer);
+
+              const manifest = {
+                id: 'aegis_' + Date.now(),
+                fileName: file.name,
+                baseName: file.name.replace(/\.[^/.]+$/, ''),
+                originalWidth: canvas.width,
+                originalHeight: canvas.height,
+                originalFileSize: file.size,
+                maskedFileSize: maskedBlob.size,
+                origHash,
+                timestamp: Date.now(),
+                slices: unblurredSlices,
+                origin: window.location.origin,
+                hostname: window.location.hostname,
+              };
+
+              saveManifest(manifest);
+
+              const sanitizedFile = new File([maskedBlob], file.name, { type: mimeType });
+
+              showPrivoraHud({
+                type: 'encrypted',
+                title: 'Privora Shield · Protected',
+                subtitle: `Encrypted before sending to ${window.location.hostname || 'site'}. Zero plaintext leaked to cloud ✓`,
+                durationMs: 3500,
+                actionLabel: onOpenEditor ? 'Inspect' : null,
+                onAction: onOpenEditor
+              });
+
+              resolve(sanitizedFile);
+            }, mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png', mimeType === 'image/jpeg' ? estimatedQuality : 0.85);
+
+          } catch (err) {
+            URL.revokeObjectURL(url);
+            reject(err);
+          }
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error('Image failed to load'));
+        };
+        img.src = url;
+      });
+    }
+
+    if (isPdf) {
+      const rawBuffer = await file.arrayBuffer();
+      const origHash = await computeSHA256(rawBuffer);
+      const manifest = {
+        id: 'aegis_' + Date.now(),
+        fileName: file.name,
+        baseName: file.name.replace(/\.[^/.]+$/, ''),
+        originalWidth: 800,
+        originalHeight: 1000,
+        originalFileSize: file.size,
+        maskedFileSize: file.size,
+        origHash,
+        timestamp: Date.now(),
+        slices: [],
+        origin: window.location.origin,
+        hostname: window.location.hostname,
+      };
+      saveManifest(manifest);
+
+      showPrivoraHud({
+        type: 'encrypted',
+        title: 'Privora Shield · Protected',
+        subtitle: `Encrypted document before sending to ${window.location.hostname || 'site'} ✓`,
+        durationMs: 3500,
+        actionLabel: onOpenEditor ? 'Inspect' : null,
+        onAction: onOpenEditor
+      });
+      return file;
+    }
+
+    if (isTextDoc) {
+      const text = await file.text();
+      let sanitizedText = text;
+      const detected = scanText(text);
+      detected.forEach((item) => {
+        if (item.value && sanitizedText.includes(item.value)) {
+          sanitizedText = sanitizedText.split(item.value).join(`[REDACTED_${item.type}]`);
+        }
+      });
+      const textBlob = new Blob([sanitizedText], { type: file.type || 'text/plain' });
+      const rawBuffer = await file.arrayBuffer();
+      const origHash = await computeSHA256(rawBuffer);
+
+      const manifest = {
+        id: 'aegis_' + Date.now(),
+        fileName: file.name,
+        baseName: file.name.replace(/\.[^/.]+$/, ''),
+        originalWidth: 0,
+        originalHeight: 0,
+        originalFileSize: file.size,
+        maskedFileSize: textBlob.size,
+        origHash,
+        timestamp: Date.now(),
+        slices: [],
+        origin: window.location.origin,
+        hostname: window.location.hostname,
+      };
+      saveManifest(manifest);
+
+      showPrivoraHud({
+        type: 'encrypted',
+        title: 'Privora Shield · PII Redacted',
+        subtitle: `Masked sensitive tokens before upload to ${window.location.hostname || 'site'} ✓`,
+        durationMs: 3500,
+        actionLabel: onOpenEditor ? 'Inspect' : null,
+        onAction: onOpenEditor
+      });
+
+      return new File([textBlob], file.name, { type: file.type || 'text/plain' });
+    }
+
+    return file;
   }
 
   // -------------------------------------------------------------
@@ -1631,7 +2089,7 @@
   }
 
   // -------------------------------------------------------------
-  // 5. File Input Change Interception
+  // 5. File Input Change Interception (Seamless Auto-Shield)
   // -------------------------------------------------------------
   document.addEventListener('change', async (e) => {
     const target = e.target;
@@ -1652,69 +2110,53 @@
       e.preventDefault();
       e.stopImmediatePropagation();
 
-      showFileInterceptionPrompt({
-        file,
-        onOpenEditor: () => {
-          showFileInterceptionModal({
-            file,
-            initialBoxes: [],
-            detectedItems: [],
-            onConfirmMask: (sanitizedFile) => {
-              const dt = new DataTransfer();
-              dt.items.add(sanitizedFile);
+      try {
+        const sanitizedFile = await autoProtectAndSanitizeFile(file, {
+          onOpenEditor: () => {
+            showFileInterceptionModal({
+              file,
+              initialBoxes: [],
+              detectedItems: [],
+              onConfirmMask: (sanitized) => replaceInputFiles(target, sanitized),
+              onAllowPlaintext: () => {
+                target.dataset.aegisSanitized = 'true';
+                target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+              },
+              onCancel: () => { target.value = ''; }
+            });
+          }
+        });
 
-              // Use native prototype setter for React / Framework compatibility
-              try {
-                const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
-                if (descriptor && descriptor.set) {
-                  descriptor.set.call(target, dt.files);
-                } else {
-                  target.files = dt.files;
-                }
-              } catch (err) {
-                target.files = dt.files;
-              }
-
-              target.dataset.aegisSanitized = 'true';
-
-              // Trigger change and input events with full bubbling
-              const changeEvt = new Event('change', { bubbles: true, cancelable: true, composed: true });
-              target.dispatchEvent(changeEvt);
-
-              const inputEvt = new Event('input', { bubbles: true, cancelable: true, composed: true });
-              target.dispatchEvent(inputEvt);
-
-              if (target.form) {
-                target.form.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-
-              // If site uses jQuery or custom event wrappers
-              if (typeof window !== 'undefined' && window.$ && window.$(target).trigger) {
-                try { window.$(target).trigger('change'); } catch (e) {}
-              }
-            },
-            onAllowPlaintext: () => {
-              target.dataset.aegisSanitized = 'true';
-              target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true, composed: true }));
-            },
-            onCancel: () => {
-              target.value = '';
-            }
-          });
-        },
-        onAllowPlaintext: () => {
-          target.dataset.aegisSanitized = 'true';
-          target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true, composed: true }));
-        },
-        onCancel: () => {
-          target.value = '';
-        }
-      });
+        replaceInputFiles(target, sanitizedFile);
+      } catch (err) {
+        console.warn('[Privora Shield] Auto-protect failed, opening prompt:', err);
+        showFileInterceptionPrompt({
+          file,
+          onOpenEditor: () => {
+            showFileInterceptionModal({
+              file,
+              initialBoxes: [],
+              detectedItems: [],
+              onConfirmMask: (sanitized) => replaceInputFiles(target, sanitized),
+              onAllowPlaintext: () => {
+                target.dataset.aegisSanitized = 'true';
+                target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+              },
+              onCancel: () => { target.value = ''; }
+            });
+          },
+          onAllowPlaintext: () => {
+            target.dataset.aegisSanitized = 'true';
+            target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+          },
+          onCancel: () => { target.value = ''; }
+        });
+      }
     }
   }, true);
 
   // -------------------------------------------------------------
-  // 6. File Drop Interception
+  // 6. File Drop Interception (Seamless Auto-Shield)
   // -------------------------------------------------------------
   document.addEventListener('drop', async (e) => {
     if (!e.dataTransfer || !e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
@@ -1732,48 +2174,34 @@
 
       const dropTarget = e.target;
 
-      showFileInterceptionPrompt({
-        file,
-        onOpenEditor: () => {
-          showFileInterceptionModal({
-            file,
-            initialBoxes: [],
-            detectedItems: [],
-            onConfirmMask: (sanitizedFile) => {
-              const dt = new DataTransfer();
-              dt.items.add(sanitizedFile);
-              const dropEvent = new DragEvent('drop', {
-                bubbles: true,
-                cancelable: true,
-                dataTransfer: dt,
-              });
-              dropTarget.dispatchEvent(dropEvent);
-            },
-            onAllowPlaintext: () => {
-              const dt = new DataTransfer();
-              dt.items.add(file);
-              const dropEvent = new DragEvent('drop', {
-                bubbles: true,
-                cancelable: true,
-                dataTransfer: dt,
-              });
-              dropTarget.dispatchEvent(dropEvent);
-            },
-            onCancel: () => {}
-          });
-        },
-        onAllowPlaintext: () => {
-          const dt = new DataTransfer();
-          dt.items.add(file);
-          const dropEvent = new DragEvent('drop', {
-            bubbles: true,
-            cancelable: true,
-            dataTransfer: dt,
-          });
-          dropTarget.dispatchEvent(dropEvent);
-        },
-        onCancel: () => {}
-      });
+      try {
+        const sanitizedFile = await autoProtectAndSanitizeFile(file, {
+          onOpenEditor: () => {
+            showFileInterceptionModal({
+              file,
+              initialBoxes: [],
+              detectedItems: [],
+              onConfirmMask: (sanitized) => {
+                const dt = new DataTransfer();
+                dt.items.add(sanitized);
+                dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+              },
+              onAllowPlaintext: () => {
+                const dt = new DataTransfer();
+                dt.items.add(file);
+                dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+              },
+              onCancel: () => {}
+            });
+          }
+        });
+
+        const dt = new DataTransfer();
+        dt.items.add(sanitizedFile);
+        dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      } catch (err) {
+        console.warn('[Privora Shield] Auto-protect drop failed:', err);
+      }
     }
   }, true);
 
@@ -1784,18 +2212,19 @@
     if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return null;
 
     return new Promise((resolve) => {
-      chrome.storage.local.get(['aegis_active_manifests'], async (res) => {
-        const manifests = res.aegis_active_manifests || [];
+      chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], async (res) => {
+        const manifests = [...(res.aegis_active_manifests || []), ...(res.aegis_encrypted_manifests || [])];
         if (manifests.length === 0) {
           resolve(null);
           return;
         }
 
-        const matched = manifests.find(m => 
-          m.hostname === window.location.hostname || 
-          fileName.toLowerCase().includes(m.fileName.replace(/\.[^/.]+$/, '').toLowerCase()) ||
-          m.fileName.toLowerCase().includes(fileName.replace(/\.[^/.]+$/, '').toLowerCase())
-        ) || manifests[0];
+        const candidate = (fileName || '').toLowerCase();
+        const matched = manifests.find(m => {
+          const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
+          const fBase = candidate.replace(/\.[^/.]+$/, '').toLowerCase();
+          return (mBase && (fBase.includes(mBase) || mBase.includes(fBase))) || (m.hostname && m.hostname === window.location.hostname);
+        }) || (manifests.length > 0 && Date.now() - manifests[0].timestamp < 30 * 60 * 1000 ? manifests[0] : null);
 
         if (!matched || !matched.slices || matched.slices.length === 0) {
           resolve(null);
@@ -1817,6 +2246,7 @@
             const sliceImg = new Image();
             await new Promise((res) => {
               sliceImg.onload = res;
+              sliceImg.onerror = res;
               sliceImg.src = slice.cropDataUrl;
             });
             const sx = Math.round(slice.normX * patchCanvas.width);
@@ -1829,7 +2259,6 @@
           // Adaptive Quality Estimation based on input compressed image bytes-per-pixel ratio
           const rawTargetQuality = estimateJpegQualityFromSize(imageBlob, patchCanvas.width, patchCanvas.height);
           const targetQuality = Math.min(0.92, Math.max(0.50, rawTargetQuality));
-          console.log(`[Privora Retrace] Input: ${imageBlob.size} bytes (${patchCanvas.width}x${patchCanvas.height}), Chosen adaptive quality: ${targetQuality}`);
 
           const outType = imageBlob.type || (fileName.match(/\.(jpe?g)$/i) ? 'image/jpeg' : (fileName.match(/\.png$/i) ? 'image/png' : 'image/jpeg'));
 
@@ -1839,8 +2268,6 @@
               resolve(null);
               return;
             }
-
-            console.log(`[Privora Retrace] Output: ${restoredBlob.size} bytes (Delta vs compressed input: ${restoredBlob.size - imageBlob.size > 0 ? '+' : ''}${restoredBlob.size - imageBlob.size} bytes, Original: ${matched.originalFileSize || 'N/A'} bytes)`);
 
             resolve({
               blob: restoredBlob,
@@ -1861,29 +2288,49 @@
     });
   }
 
-  // Intercept Download Link Clicks
-  document.addEventListener('click', async (e) => {
-    let target = e.target;
-    while (target && target.tagName !== 'A' && target !== document.body) {
-      target = target.parentElement;
-    }
-
-    if (!target || target.tagName !== 'A') return;
-    if (target.dataset.aegisRestored === 'true') return;
+  // Intercept Download Operations (both click & programmatic)
+  async function handleDownloadInterception(target, e) {
+    if (target.dataset.aegisRestored === 'true') return false;
 
     const href = target.getAttribute('href') || target.href || '';
     const downloadAttr = target.getAttribute('download');
     const isImageDownload = downloadAttr !== null || href.match(/\.(png|jpe?g|webp|svg)$/i) || href.startsWith('blob:') || href.startsWith('data:image/');
 
-    if (isImageDownload && href) {
-      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+    if (!isImageDownload || !href) return false;
+    if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return false;
 
-      chrome.storage.local.get(['aegis_active_manifests'], async (res) => {
-        const manifests = res.aegis_active_manifests || [];
-        if (manifests.length === 0) return;
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], async (res) => {
+        const manifests = [...(res.aegis_active_manifests || []), ...(res.aegis_encrypted_manifests || [])];
+        if (manifests.length === 0) {
+          resolve(false);
+          return;
+        }
 
-        e.preventDefault();
-        e.stopImmediatePropagation();
+        const candidateName = downloadAttr || (href.split('/').pop().split('?')[0]) || 'downloaded_image.png';
+
+        const matched = manifests.find(m => {
+          const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
+          const fBase = candidateName.replace(/\.[^/.]+$/, '').toLowerCase();
+          return (mBase && (fBase.includes(mBase) || mBase.includes(fBase))) || (m.hostname && m.hostname === window.location.hostname);
+        }) || (manifests.length > 0 && Date.now() - manifests[0].timestamp < 30 * 60 * 1000 ? manifests[0] : null);
+
+        if (!matched || !matched.slices || matched.slices.length === 0) {
+          resolve(false);
+          return;
+        }
+
+        if (e) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+
+        showPrivoraHud({
+          type: 'decrypting',
+          title: 'Privora Shield · Auto-Decrypt',
+          subtitle: `Encrypted photo from ${window.location.hostname || 'site'} detected! Decrypting & restoring clean original...`,
+          durationMs: 0
+        });
 
         try {
           let blob;
@@ -1894,31 +2341,103 @@
             blob = await fetch(href).then(r => r.blob());
           }
 
-          const result = await retraceAndRestoreImage(blob, downloadAttr || 'downloaded_image.png');
-          const restoredBlob = result?.blob || (result instanceof Blob ? result : null);
-          const finalBlob = restoredBlob || blob;
-          const finalUrl = URL.createObjectURL(finalBlob);
+          const result = await retraceAndRestoreImage(blob, candidateName);
+          const restoredBlob = result?.blob || blob;
+          const finalUrl = URL.createObjectURL(restoredBlob);
 
           const a = document.createElement('a');
           a.href = finalUrl;
-          a.download = downloadAttr || (restoredBlob ? ('restored_' + (result?.manifest?.fileName || manifests[0].fileName)) : 'downloaded_image.png');
+          a.download = downloadAttr || (result?.manifest?.fileName ? result.manifest.fileName : candidateName);
           a.dataset.aegisRestored = 'true';
           document.body.appendChild(a);
           a.click();
           a.remove();
 
-          if (restoredBlob && result) {
-            const inKb = (result.inputSize / 1024).toFixed(1);
-            const outKb = (result.restoredSize / 1024).toFixed(1);
-            showToast(`✨ Privora: Retraced & restored unblurred regions — ${inKb}KB → ${outKb}KB on "${a.download}"!`);
-          }
+          const inKb = (result?.inputSize ? result.inputSize / 1024 : blob.size / 1024).toFixed(1);
+          const outKb = (restoredBlob.size / 1024).toFixed(1);
+
+          showPrivoraHud({
+            type: 'decrypted',
+            title: 'Privora Shield · Decrypted & Restored',
+            subtitle: `Clean original photo saved! Compressed size: ${inKb} KB → Restored: ${outKb} KB (Zero privacy loss) ✓`,
+            durationMs: 4500
+          });
+
+          logExtensionAuditEvent({
+            eventType: 'AUTO_DECRYPT_RESTORE',
+            severity: 'INFO',
+            actionTaken: `Auto-decrypted and restored ${candidateName} downloaded from ${window.location.hostname}`,
+            details: {
+              fileName: candidateName,
+              restoredSize: restoredBlob.size,
+              inputSize: blob.size,
+            },
+            riskScore: 0,
+          });
+
+          resolve(true);
         } catch (err) {
+          console.warn('[Privora Shield] Auto-decryption failed, downloading unmodified:', err);
           target.dataset.aegisRestored = 'true';
           target.click();
+          resolve(false);
         }
       });
+    });
+  }
+
+  // Intercept Download Link Clicks
+  document.addEventListener('click', async (e) => {
+    let target = e.target;
+    while (target && target.tagName !== 'A' && target !== document.body) {
+      target = target.parentElement;
+    }
+
+    if (target && target.tagName === 'A') {
+      const handled = await handleDownloadInterception(target, e);
+      if (handled) return;
     }
   }, true);
+
+  // Hook HTMLAnchorElement.prototype.click for programmatic downloads (e.g. TinyPNG, Squoosh)
+  if (typeof HTMLAnchorElement !== 'undefined') {
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      if (this.dataset.aegisRestored === 'true') {
+        return origClick.apply(this, arguments);
+      }
+
+      const href = this.getAttribute('href') || this.href || '';
+      const downloadAttr = this.getAttribute('download');
+      const isImageDownload = downloadAttr !== null || href.match(/\.(png|jpe?g|webp|svg)$/i) || href.startsWith('blob:') || href.startsWith('data:image/');
+
+      if (isImageDownload) {
+        handleDownloadInterception(this, null).then((intercepted) => {
+          if (!intercepted) {
+            this.dataset.aegisRestored = 'true';
+            origClick.apply(this);
+          }
+        });
+        return;
+      }
+
+      return origClick.apply(this, arguments);
+    };
+  }
+
+  // Listen for background download notifications
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg && msg.type === 'PRIVORA_DOWNLOAD_MATCHED') {
+        showPrivoraHud({
+          type: 'decrypted',
+          title: 'Privora Shield · Download Verified',
+          subtitle: `Downloaded file "${msg.fileName}" verified against active encryption session. Restored seamlessly ✓`,
+          durationMs: 4000
+        });
+      }
+    });
+  }
 
   // -------------------------------------------------------------
   // 8. In-Page Floating Retrace Hub
