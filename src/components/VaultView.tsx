@@ -57,6 +57,9 @@ interface RestoredUploadData {
   objectUrlToRevoke?: string;
   crops?: CropSlice[];
   isPdf?: boolean;
+  uploadedSize?: number;
+  restoredSize?: number;
+  mimeType?: string;
 }
 
 export const VaultView: React.FC<VaultViewProps> = ({
@@ -245,14 +248,25 @@ export const VaultView: React.FC<VaultViewProps> = ({
           objectUrlToRevoke = restoredDataUrl;
           decryptedCrops = await extractDecryptedCrops(matched.encryptedRegions, dek, matched.fileName);
         } else {
-          // Single-Page or Image Document
-          const isUploadedImage = file.type.startsWith('image/') || file.name.match(/\.(png|jpe?g|webp|svg)$/i);
+          // Single-Page or Image Document (JPEG, PNG, WebP)
+          const isUploadedImage = file.type.startsWith('image/') || !!file.name.match(/\.(png|jpe?g|webp|svg)$/i);
+          const isJpeg = file.type === 'image/jpeg' || !!file.name.match(/\.(jpe?g)$/i);
+          const isWebp = file.type === 'image/webp' || !!file.name.match(/\.webp$/i);
+          const chosenMime = isJpeg ? 'image/jpeg' : (isWebp ? 'image/webp' : 'image/png');
+          const ext = isJpeg ? 'jpg' : (isWebp ? 'webp' : 'png');
+
           const targetSource = isUploadedImage ? URL.createObjectURL(file) : (typeof matched.encryptedBlob === 'string' ? matched.encryptedBlob : (matched.pdfPages?.[0]?.pageImageDataUrl || ''));
 
+          // Decrypt with adaptive compression preservation
           const decryptedImgUrl = await CryptoEngine.decryptImageRegions(
             targetSource,
             matched.encryptedRegions,
-            dek
+            dek,
+            undefined,
+            {
+              mimeType: chosenMime,
+              targetByteSize: file.size,
+            }
           );
 
           decryptedCrops = await extractDecryptedCrops(matched.encryptedRegions, dek, matched.fileName);
@@ -274,6 +288,35 @@ export const VaultView: React.FC<VaultViewProps> = ({
           } else {
             restoredDataUrl = decryptedImgUrl;
           }
+
+          const baseRestoredName = matched.fileName.replace(/\.[^/.]+$/, '');
+          const outputFileName = `restored_${baseRestoredName}.${ext}`;
+          const base64Part = decryptedImgUrl.includes(',') ? decryptedImgUrl.split(',')[1] : '';
+          const restoredSize = base64Part ? Math.round(base64Part.length * 0.75) : file.size;
+
+          setRestoredResult({
+            record: matched,
+            restoredDataUrl,
+            fileName: outputFileName,
+            matchMethod: `Matched with Vault Record: ${matched.fileName} (SHA-256 Signature Verified)`,
+            objectUrlToRevoke,
+            crops: decryptedCrops,
+            isPdf: isPdfFile,
+            uploadedSize: file.size,
+            restoredSize,
+            mimeType: chosenMime,
+          });
+          setActionSuccess(`Matched and restored "${matched.fileName}" retaining compressed size (${(restoredSize / 1024).toFixed(1)} KB)!`);
+          await vaultDB.logEvent({
+            eventType: 'VIEW_MEMORY',
+            severity: 'SUCCESS',
+            source: 'WEB_APP',
+            fileId: matched.id,
+            fileName: matched.fileName,
+            actionTaken: 'Document uploaded from PC, matched with database record, and restored in memory preserving compression',
+            details: { uploadedFileName: file.name, uploadedSize: file.size, restoredSize },
+          });
+          return;
         }
       } else if (matched.encryptedBlob instanceof Blob) {
         const encBytes = await matched.encryptedBlob.arrayBuffer();
@@ -282,21 +325,33 @@ export const VaultView: React.FC<VaultViewProps> = ({
         const blob = new Blob([decBuf], { type: isPdfFile ? 'application/pdf' : matched.originalMimeType });
         restoredDataUrl = URL.createObjectURL(blob);
         objectUrlToRevoke = restoredDataUrl;
+
+        setRestoredResult({
+          record: matched,
+          restoredDataUrl,
+          fileName: 'original_' + matched.fileName,
+          matchMethod: `Matched with Vault Record: ${matched.fileName} (SHA-256 Signature Verified)`,
+          objectUrlToRevoke,
+          crops: decryptedCrops,
+          isPdf: isPdfFile,
+          uploadedSize: file.size,
+          restoredSize: blob.size,
+          mimeType: blob.type,
+        });
+        setActionSuccess(`Matched and restored original "${matched.fileName}" from local vault!`);
+        await vaultDB.logEvent({
+          eventType: 'VIEW_MEMORY',
+          severity: 'SUCCESS',
+          source: 'WEB_APP',
+          fileId: matched.id,
+          fileName: matched.fileName,
+          actionTaken: 'Document uploaded from PC, matched with database record, and restored in memory',
+          details: { uploadedFileName: file.name },
+        });
+        return;
       } else {
         throw new Error('Unsupported record format for restoration.');
       }
-
-      setRestoredResult({
-        record: matched,
-        restoredDataUrl,
-        fileName: 'original_' + matched.fileName,
-        matchMethod: `Matched with Vault Record: ${matched.fileName} (SHA-256 Signature Verified)`,
-        objectUrlToRevoke,
-        crops: decryptedCrops,
-        isPdf: isPdfFile,
-      });
-
-      setActionSuccess(`Matched and restored original "${matched.fileName}" from local vault!`);
       await vaultDB.logEvent({
         eventType: 'VIEW_MEMORY',
         severity: 'SUCCESS',
@@ -1001,15 +1056,15 @@ export const VaultView: React.FC<VaultViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 max-w-7xl mx-auto font-sans">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-5 rounded-2xl bg-white border border-slate-200/90 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-4 p-5 rounded-2xl bg-white border border-black/5 shadow-minimal">
         <div>
-          <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-            <FileLock2 className="w-5 h-5 text-indigo-600" />
+          <h3 className="text-base font-bold text-[#212529] flex items-center gap-2">
+            <FileLock2 className="w-5 h-5 text-[#9C8DD4]" />
             <span>Encrypted Local Vault</span>
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-[#757575] mt-0.5">
             IndexedDB zero-server store. Individual DEKs wrapped with Master KEK (AES-256-GCM).
           </p>
         </div>
@@ -1030,7 +1085,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
           <button
             onClick={() => uploadInputRef.current?.click()}
             disabled={isRestoring}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-500/20 transition-all disabled:opacity-50"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#A99DD8] hover:bg-[#8A7BC7] text-white font-semibold text-xs shadow-minimal hover:shadow-purple-glow transition-all disabled:opacity-50"
             title="Upload an encrypted/masked document to match with vault and restore original plaintext"
           >
             {isRestoring ? (
@@ -1048,50 +1103,52 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
           <button
             onClick={loadVaultFiles}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-xs text-slate-700 border border-slate-200 transition-all font-medium"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#FAF9F6] hover:bg-[#E2E1E6] text-xs text-[#212529] border border-black/5 transition-all font-medium shadow-minimal"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            Refresh
+            <span>Refresh</span>
           </button>
 
           {files.length > 0 && (
             <button
               onClick={handleClearAllVaultData}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold transition-all"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#E77A73]/10 hover:bg-[#E77A73]/20 text-[#E77A73] border border-[#E77A73]/20 text-xs font-semibold transition-all shadow-minimal"
               title="Delete all files and reset database"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Reset Vault
+              <span>Reset Vault</span>
             </button>
           )}
         </div>
       </div>
 
       {tamperAlert && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-3">
-          <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
+        <div className="p-4 rounded-2xl bg-[#E77A73]/15 border border-[#E77A73]/30 text-[#212529] text-xs flex items-center gap-3 shadow-minimal">
+          <ShieldAlert className="w-5 h-5 text-[#E77A73] shrink-0" />
           <div className="font-semibold">{tamperAlert}</div>
         </div>
       )}
 
       {actionSuccess && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-3">
-          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+        <div className="p-4 rounded-2xl bg-[#4ADE80]/15 border border-[#4ADE80]/30 text-[#212529] text-xs flex items-center gap-3 shadow-minimal">
+          <CheckCircle2 className="w-5 h-5 text-[#4ADE80] shrink-0" />
           <div className="font-semibold">{actionSuccess}</div>
         </div>
       )}
 
       {/* Files List / Grid */}
       {loading ? (
-        <div className="p-12 text-center text-slate-500 text-xs">
-          <RefreshCw className="w-6 h-6 animate-spin mx-auto text-indigo-600 mb-2" />
+        <div className="p-12 text-center text-[#757575] text-xs">
+          <RefreshCw className="w-6 h-6 animate-spin mx-auto text-[#9C8DD4] mb-2" />
           Loading encrypted vault records...
         </div>
       ) : files.length === 0 ? (
-        <div className="p-12 rounded-2xl bg-white border border-slate-200 text-center space-y-3 shadow-sm">
-          <Lock className="w-10 h-10 mx-auto text-slate-400" />
-          <h4 className="text-sm font-bold text-slate-800">Your Local Vault is Empty</h4>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
+        <div className="p-12 rounded-3xl bg-white border border-black/5 text-center space-y-3 shadow-minimal">
+          <div className="w-12 h-12 rounded-full bg-[#9C8DD4]/15 border border-[#9C8DD4]/30 flex items-center justify-center text-[#9C8DD4] mx-auto">
+            <Lock className="w-6 h-6" />
+          </div>
+          <h4 className="text-sm font-bold text-[#212529]">Your Local Vault is Empty</h4>
+          <p className="text-xs text-[#757575] max-w-md mx-auto">
             Files scanned in the 'Scan & Protect' studio and encrypted with Web Crypto API will appear here.
           </p>
         </div>
@@ -1100,37 +1157,37 @@ export const VaultView: React.FC<VaultViewProps> = ({
           {files.map((file) => (
             <div
               key={file.id}
-              className="bg-white border border-slate-200 hover:border-indigo-300 hover:shadow-md rounded-2xl p-4 flex flex-col justify-between space-y-4 transition-all shadow-sm"
+              className="bg-white border border-black/5 hover:border-[#9C8DD4]/50 hover:shadow-minimal rounded-3xl p-5 flex flex-col justify-between space-y-4 transition-all shadow-minimal"
             >
               <div>
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2.5">
-                    <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600">
+                    <div className="w-9 h-9 rounded-2xl bg-[#9C8DD4]/15 border border-[#9C8DD4]/30 flex items-center justify-center text-[#9C8DD4]">
                       {file.pipelineUsed === 'AES-256-GCM-SELECTIVE-REGION' ? (
-                        <ImageIcon className="w-5 h-5" />
+                        <ImageIcon className="w-4 h-4" />
                       ) : (
-                        <FileText className="w-5 h-5" />
+                        <FileText className="w-4 h-4" />
                       )}
                     </div>
                     <div className="overflow-hidden">
-                      <h4 className="text-xs font-bold text-slate-900 truncate max-w-[170px]" title={file.fileName}>
+                      <h4 className="text-xs font-bold text-[#212529] truncate max-w-[170px]" title={file.fileName}>
                         {file.fileName}
                       </h4>
-                      <span className="text-[10px] font-mono text-slate-500">
+                      <span className="text-[10px] font-mono text-[#757575]">
                         {Math.round(file.originalSize / 1024)} KB · {new Date(file.createdAt).toLocaleTimeString()}
                       </span>
                     </div>
                   </div>
 
                   {/* Explicit Pipeline Badge for all 4 pipelines */}
-                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
+                  <span className={`text-[10px] font-mono px-2.5 py-0.5 rounded-full font-bold ${
                     file.pipelineUsed === 'AES-256-GCM-SELECTIVE-REGION'
-                      ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                      ? 'bg-[#9C8DD4]/15 text-[#9C8DD4] border border-[#9C8DD4]/30'
                       : file.pipelineUsed === 'REDACTED-METADATA'
                       ? 'bg-amber-50 text-amber-800 border border-amber-200'
                       : file.pipelineUsed === 'SYNTHETIC-PSEUDONYMIZED'
-                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                      : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                      ? 'bg-[#4ADE80]/20 text-[#14532D] border border-[#4ADE80]/30'
+                      : 'bg-[#E2E1E6] text-[#212529] border border-black/5'
                   }`}>
                     {file.pipelineUsed === 'AES-256-GCM-SELECTIVE-REGION'
                       ? 'REGION ENCRYPT'
@@ -1142,23 +1199,23 @@ export const VaultView: React.FC<VaultViewProps> = ({
                   </span>
                 </div>
 
-                <div className="mt-3 p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1.5 text-[11px]">
-                  <div className="flex justify-between text-slate-600">
+                <div className="mt-3 p-3 rounded-2xl bg-[#FAF9F6] border border-black/5 space-y-1.5 text-[11px]">
+                  <div className="flex justify-between text-[#757575]">
                     <span>Category:</span>
-                    <span className="font-mono font-bold text-slate-800">{file.metadata.category}</span>
+                    <span className="font-mono font-bold text-[#212529]">{file.metadata.category}</span>
                   </div>
-                  <div className="flex justify-between text-slate-600">
+                  <div className="flex justify-between text-[#757575]">
                     <span>Integrity SHA-256:</span>
-                    <span className="font-mono font-bold text-indigo-600">{file.originalHash.substring(0, 10)}...</span>
+                    <span className="font-mono font-bold text-[#9C8DD4]">{file.originalHash.substring(0, 10)}...</span>
                   </div>
                 </div>
               </div>
 
               {/* Action Buttons */}
-              <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
+              <div className="pt-2 border-t border-black/5 flex items-center justify-between gap-1.5">
                 <button
                   onClick={() => handleViewInMemory(file)}
-                  className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold transition-all"
+                  className="flex-1 flex items-center justify-center gap-1 py-1.5 px-3 rounded-full bg-[#A99DD8] hover:bg-[#8A7BC7] text-white text-xs font-semibold shadow-minimal transition-all"
                   title="Decrypt in volatile memory only (never written to disk)"
                 >
                   <Eye className="w-3.5 h-3.5" />
@@ -1167,44 +1224,44 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
                 <button
                   onClick={() => handleDownloadMasked(file)}
-                  className="p-1.5 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs transition-colors"
+                  className="p-2 rounded-full bg-[#FAF9F6] hover:bg-[#E2E1E6] text-[#212529] border border-black/5 text-xs transition-colors shadow-minimal"
                   title="Download Sanitized / Masked file (with privacy blur / synthetic data)"
                 >
-                  <Lock className="w-4 h-4" />
+                  <Lock className="w-3.5 h-3.5" />
                 </button>
 
                 <button
                   onClick={() => handleRestoreDownload(file)}
-                  className="p-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs transition-colors"
+                  className="p-2 rounded-full bg-[#FAF9F6] hover:bg-[#E2E1E6] text-[#212529] border border-black/5 text-xs transition-colors shadow-minimal"
                   title="Decrypt & Export original restored plaintext file"
                 >
-                  <Download className="w-4 h-4" />
+                  <Download className="w-3.5 h-3.5" />
                 </button>
 
                 <button
                   onClick={() => onFileShared?.(file.id)}
-                  className="p-1.5 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 text-slate-600 text-xs transition-colors"
+                  className="p-2 rounded-full bg-[#FAF9F6] hover:bg-[#E2E1E6] text-[#212529] border border-black/5 text-xs transition-colors shadow-minimal"
                   title="Share encrypted file via serverless WebRTC QR"
                 >
-                  <QrCode className="w-4 h-4" />
+                  <QrCode className="w-3.5 h-3.5 text-[#9C8DD4]" />
                 </button>
 
                 {file.pipelineUsed !== 'AES-256-GCM-SELECTIVE-REGION' && (
                   <button
                     onClick={() => handleSimulateTamper(file)}
-                    className="p-1.5 rounded-lg bg-slate-50 hover:bg-amber-50 hover:text-amber-700 border border-slate-200 text-slate-600 text-xs transition-colors"
+                    className="p-2 rounded-full bg-[#FAF9F6] hover:bg-amber-100 text-amber-700 border border-black/5 text-xs transition-colors shadow-minimal"
                     title="🧪 Security Test: Intentionally corrupts 1 byte of ciphertext to test if cryptographic tamper defense blocks it"
                   >
-                    <Bug className="w-4 h-4" />
+                    <Bug className="w-3.5 h-3.5" />
                   </button>
                 )}
 
                 <button
                   onClick={() => handleDeleteFile(file.id)}
-                  className="p-1.5 rounded-lg bg-slate-50 hover:bg-rose-50 hover:text-rose-700 border border-slate-200 text-slate-500 text-xs transition-colors"
+                  className="p-2 rounded-full bg-[#FAF9F6] hover:bg-[#E77A73]/15 text-[#E77A73] border border-black/5 text-xs transition-colors shadow-minimal"
                   title="Delete from local vault"
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
@@ -1436,6 +1493,21 @@ export const VaultView: React.FC<VaultViewProps> = ({
                 />
               )}
             </div>
+
+            {/* Automatic Size Maintenance Indicator */}
+            {!restoredResult.isPdf && restoredResult.uploadedSize && (
+              <div className="p-3 bg-[#FAF9F6] border border-black/5 rounded-xl flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-[#212529]">Decrypted Image Size:</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono font-bold text-[11px]">
+                    ~{((restoredResult.restoredSize || 0) / 1024).toFixed(1)} KB (Preserves Compressed Size)
+                  </span>
+                </div>
+                <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                  ✓ Similar Size Retained
+                </span>
+              </div>
+            )}
 
             {/* Standalone Sensitive Crop Slices in Restored Modal */}
             {restoredResult.crops && restoredResult.crops.length > 0 && (

@@ -14,6 +14,7 @@ import {
   CheckCircle, 
   RefreshCw, 
   ChevronRight,
+  ChevronLeft,
   HelpCircle,
   FileCode,
   CreditCard,
@@ -26,8 +27,12 @@ import {
   Brain,
   Zap,
   Bot,
-  Activity
+  Activity,
+  LayoutTemplate,
+  Sliders,
+  Layers
 } from 'lucide-react';
+import { ThreeStudioModel } from './ThreeStudioModel';
 import { 
   DetectionResult, 
   AgentDecision, 
@@ -106,6 +111,8 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
   const [dragMode, setDragMode] = useState<'DRAW_NEW' | 'MOVE' | 'RESIZE_TL' | 'RESIZE_TR' | 'RESIZE_BL' | 'RESIZE_BR' | null>(null);
   const [dragAnchor, setDragAnchor] = useState<{ startX: number; startY: number; origBox: BoundingBox } | null>(null);
   const [canvasCursor, setCanvasCursor] = useState<string>('crosshair');
+  const [sidePanelTab, setSidePanelTab] = useState<'uploads' | 'templates' | 'redaction' | 'synthetic' | 'ai' | 'export'>('uploads');
+  const [isSidePanelOpen, setIsSidePanelOpen] = useState<boolean>(true);
 
   // Detect WebGPU hardware acceleration capabilities on mount
   useEffect(() => {
@@ -716,6 +723,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
       });
       setDecision(agentDecision);
       setSelectedAction(agentDecision.action);
+      setSidePanelTab('redaction');
     } catch (err) {
       console.error('File scan error:', err);
       setError(err instanceof Error ? err.message : 'File scan encountered an error.');
@@ -1241,10 +1249,17 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
               }
             });
 
+            const isJpeg = currentFile.type === 'image/jpeg' || !!currentFile.name.match(/\.(jpe?g)$/i);
+            const isWebp = currentFile.type === 'image/webp' || !!currentFile.name.match(/\.webp$/i);
+            const chosenMime = isJpeg ? 'image/jpeg' : (isWebp ? 'image/webp' : 'image/png');
+            const ext = isJpeg ? 'jpg' : (isWebp ? 'webp' : 'png');
+
             const { maskedImageDataUrl, encryptedRegionRecords } = await CryptoEngine.encryptImageRegions(
               cleanCanvas,
               regionsToEncrypt,
-              dek
+              dek,
+              chosenMime,
+              isJpeg || isWebp ? 0.90 : 1.0
             );
 
             if (isOriginalPdf) {
@@ -1275,11 +1290,11 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
               finalFileName = `redacted_${currentFile.name}`;
               objectUrlToRevoke = finalDownloadUrl;
             } else {
-              // Standard Image (PNG/JPG)
+              // Standard Image (PNG/JPG/WEBP with optional compression)
               savedEncryptedBlob = maskedImageDataUrl;
               savedEncryptedRegions = encryptedRegionRecords;
               finalDownloadUrl = maskedImageDataUrl;
-              finalFileName = `encrypted_${baseName}.png`;
+              finalFileName = `encrypted_${baseName}.${ext}`;
             }
           }
 
@@ -1463,63 +1478,24 @@ console.log("Starting secure daemon...");`;
   };
 
   return (
-    <div className="space-y-6">
-      {/* 🌟 Safety & Hardware Telemetry Bento Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-        <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all">
-          <div className="flex items-center gap-2 text-indigo-600">
-            <Brain className="w-4 h-4" />
-            <span className="text-[11px] font-bold uppercase tracking-wider font-mono">On-Device SLM</span>
-          </div>
-          <p className="text-xs font-bold text-slate-900 mt-1">DistilBERT ONNX</p>
-          <p className="text-[11px] text-slate-500">66M Params · WebAssembly SIMD</p>
-        </div>
-
-        <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all">
-          <div className="flex items-center gap-2 text-sky-600">
-            <Scan className="w-4 h-4" />
-            <span className="text-[11px] font-bold uppercase tracking-wider font-mono">Perception AI</span>
-          </div>
-          <p className="text-xs font-bold text-slate-900 mt-1">LSTM OCR & Biometrics</p>
-          <p className="text-[11px] text-slate-500">Tesseract WASM + Face Worker</p>
-        </div>
-
-        <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all">
-          <div className="flex items-center gap-2 text-emerald-600">
-            <ShieldCheck className="w-4 h-4" />
-            <span className="text-[11px] font-bold uppercase tracking-wider font-mono">Zero-Cloud Vault</span>
-          </div>
-          <p className="text-xs font-bold text-slate-900 mt-1">AES-256-GCM Envelope</p>
-          <p className="text-[11px] text-slate-500">WebAuthn PRF Hardware Key</p>
-        </div>
-
-        <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all">
-          <div className="flex items-center gap-2 text-amber-600">
-            <Sparkles className="w-4 h-4" />
-            <span className="text-[11px] font-bold uppercase tracking-wider font-mono">Math Guarantees</span>
-          </div>
-          <p className="text-xs font-bold text-slate-900 mt-1">Dihedral D5 & Luhn</p>
-          <p className="text-[11px] text-slate-500">Zero False Positive Checksums</p>
-        </div>
-      </div>
-
+    <div className="space-y-6 max-w-7xl mx-auto font-sans">
       {/* Error Banner */}
       {error && (
-        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center gap-3 text-rose-800">
-          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+        <div className="bg-[#E77A73]/10 border border-[#E77A73]/20 rounded-2xl p-4 flex items-center gap-3 text-[#212529] shadow-minimal">
+          <AlertCircle className="w-5 h-5 text-[#E77A73] shrink-0" />
           <p className="text-sm font-medium">{error}</p>
         </div>
       )}
 
       {/* Success Notification */}
       {encryptionSuccess && successMessage && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-3 text-emerald-900 shadow-sm animate-fadeIn">
+        <div className="bg-[#4ADE80]/10 border border-[#4ADE80]/20 rounded-2xl p-4 sm:p-5 space-y-3 text-[#212529] shadow-minimal animate-fadeIn">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
+              <CheckCircle className="w-5 h-5 text-[#16A34A] shrink-0" />
               <div>
-                <p className="text-sm font-bold">{successMessage}</p>
-                <p className="text-xs text-emerald-700 mt-0.5">
+                <p className="text-sm font-bold text-[#212529]">{successMessage}</p>
+                <p className="text-xs text-[#757575] mt-0.5">
                   File is securely locked with AES-256-GCM and saved to your local on-device vault.
                 </p>
               </div>
@@ -1529,7 +1505,7 @@ console.log("Starting secure daemon...");`;
               <a
                 href={lastEncryptedFile.downloadUrl}
                 download={lastEncryptedFile.fileName}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center gap-2 shrink-0"
+                className="px-5 py-2.5 bg-[#4ADE80] hover:bg-[#3ec470] text-[#14532D] font-bold text-xs rounded-full shadow-minimal transition-all flex items-center gap-2 shrink-0"
               >
                 <Download className="w-4 h-4" />
                 <span>Download Encrypted Document</span>
@@ -1537,22 +1513,21 @@ console.log("Starting secure daemon...");`;
             )}
           </div>
 
-          {/* Standalone Sensitive Crop Slices (Face, Aadhaar UID, etc.) */}
           {lastEncryptedFile?.crops && lastEncryptedFile.crops.length > 0 && (
-            <div className="pt-2.5 border-t border-emerald-200 flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-bold text-emerald-800 font-mono flex items-center gap-1">
-                <Scissors className="w-3.5 h-3.5" />
-                <span>Download Hidden Pieces Separately:</span>
+            <div className="pt-3 border-t border-black/5 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold text-[#212529] font-mono flex items-center gap-1">
+                <Scissors className="w-3.5 h-3.5 text-[#9C8DD4]" />
+                <span>Download Hidden Slices Separately:</span>
               </span>
               {lastEncryptedFile.crops.map((crop, idx) => (
                 <a
                   key={idx}
                   href={crop.downloadUrl}
                   download={crop.fileName}
-                  className="px-2.5 py-1 bg-white hover:bg-emerald-100/60 text-emerald-900 text-xs font-semibold rounded-lg border border-emerald-300 shadow-sm flex items-center gap-1.5 transition-all"
+                  className="px-3 py-1 bg-white hover:bg-[#FAF9F6] text-[#212529] text-xs font-semibold rounded-full border border-black/10 shadow-minimal flex items-center gap-1.5 transition-all"
                   title={`Download isolated ${crop.label} slice`}
                 >
-                  <Download className="w-3 h-3 text-emerald-600" />
+                  <Download className="w-3 h-3 text-[#9C8DD4]" />
                   <span>{crop.label}</span>
                 </a>
               ))}
@@ -1561,809 +1536,995 @@ console.log("Starting secure daemon...");`;
         </div>
       )}
 
-      {/* Top Demo Scenario Bar */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider">
-            <Sparkles className="w-4 h-4 text-indigo-600" />
-            Quick Test Scenarios:
+      {/* 🎨 Top Canva-Style Studio Header */}
+      <div className="bg-white border border-black/5 rounded-3xl p-4 sm:p-5 shadow-minimal flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-[#9C8DD4]/15 border border-[#9C8DD4]/30 flex items-center justify-center text-[#9C8DD4] shadow-minimal">
+            <Sparkles className="w-5 h-5" />
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => handleLoadSample('ID')}
-              disabled={isScanning || isEncrypting}
-              className="px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 hover:text-indigo-700 disabled:opacity-50 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 flex items-center gap-1.5 transition-all"
-            >
-              <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
-              Govt ID (Aadhaar & PAN)
-            </button>
-            <button
-              onClick={() => handleLoadSample('FINANCE')}
-              disabled={isScanning || isEncrypting}
-              className="px-3 py-1.5 bg-slate-50 hover:bg-amber-50 hover:text-amber-800 disabled:opacity-50 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 flex items-center gap-1.5 transition-all"
-            >
-              <CreditCard className="w-3.5 h-3.5 text-amber-600" />
-              Financial Invoice
-            </button>
-            <button
-              onClick={() => handleLoadSample('CODE')}
-              disabled={isScanning || isEncrypting}
-              className="px-3 py-1.5 bg-slate-50 hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 flex items-center gap-1.5 transition-all"
-            >
-              <FileCode className="w-3.5 h-3.5 text-rose-600" />
-              API Secrets
-            </button>
-            <button
-              onClick={() => handleLoadSample('PHOTO')}
-              disabled={isScanning || isEncrypting}
-              className="px-3 py-1.5 bg-slate-50 hover:bg-purple-50 hover:text-purple-700 disabled:opacity-50 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 flex items-center gap-1.5 transition-all"
-            >
-              <MapPin className="w-3.5 h-3.5 text-purple-600" />
-              Photo + Geotag
-            </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-[#212529] tracking-tight">
+                Privora Studio
+              </h2>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-[#FAF9F6] border border-black/5 text-[#757575]">
+                {currentFile ? currentFile.name : 'Design & Privacy Workspace'}
+              </span>
+            </div>
+            <p className="text-xs text-[#757575] flex items-center gap-1.5 mt-0.5">
+              <span className="w-2 h-2 rounded-full bg-[#4ADE80] animate-pulse" />
+              <span>100% On-Device WebAssembly Sandbox · 0.00B egress</span>
+            </p>
           </div>
+        </div>
+
+        {/* Quick Action CTA */}
+        <div className="flex items-center gap-2.5">
+          {currentFile && (
+            <button
+              onClick={() => {
+                setSidePanelTab('export');
+                setIsSidePanelOpen(true);
+              }}
+              className="px-4 py-2 bg-[#A99DD8] hover:bg-[#8A7BC7] text-white text-xs font-semibold rounded-full shadow-minimal hover:shadow-purple-glow transition-all flex items-center gap-2"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>Export & Protect</span>
+            </button>
+          )}
+          <button
+            onClick={() => setIsSidePanelOpen(!isSidePanelOpen)}
+            className="p-2 bg-[#FAF9F6] hover:bg-[#E2E1E6] text-[#212529] rounded-full border border-black/5 text-xs font-medium transition-all shadow-minimal"
+            title={isSidePanelOpen ? 'Collapse Tools Panel' : 'Open Tools Panel'}
+          >
+            {isSidePanelOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          </button>
         </div>
       </div>
 
-      {/* Main Drag-and-Drop / Upload Workspace */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Dropzone & Live Canvas Preview */}
-        <div className="lg:col-span-7 space-y-4">
-          <div 
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
-              currentFile 
-                ? 'border-indigo-400 bg-indigo-50/20 shadow-sm' 
-                : 'border-slate-300 hover:border-indigo-400 bg-white hover:bg-slate-50/80 shadow-sm'
-            }`}
-          >
-            <input 
-              ref={fileInputRef}
-              type="file" 
-              className="hidden" 
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  handleProcessFile(e.target.files[0]);
-                }
-              }}
-            />
+      {/* 🖥️ Main Canva-Style Studio Shell */}
+      <div className="bg-white rounded-3xl border border-black/5 shadow-minimal overflow-hidden flex flex-col md:flex-row min-h-[720px]">
+        {/* 1. Left Icon Rail (Canva Style) */}
+        <div className="w-full md:w-20 bg-[#FAF9F6] border-b md:border-b-0 md:border-r border-black/5 flex flex-row md:flex-col items-center justify-around md:justify-start py-3 md:py-5 gap-2 shrink-0 select-none">
+          {(
+            [
+              { id: 'uploads' as const, label: 'Upload', icon: UploadCloud },
+              { id: 'templates' as const, label: 'Templates', icon: LayoutTemplate },
+              { id: 'redaction' as const, label: 'Redact', icon: EyeOff, badge: detection?.detectedItems.length },
+              { id: 'synthetic' as const, label: 'Synthetic', icon: Sparkles, badge: syntheticMappings.length },
+              { id: 'ai' as const, label: 'AI Agent', icon: Brain },
+              { id: 'export' as const, label: 'Export', icon: Lock },
+            ] as Array<{
+              id: 'uploads' | 'templates' | 'redaction' | 'synthetic' | 'ai' | 'export';
+              label: string;
+              icon: React.ElementType;
+              badge?: number;
+            }>
+          ).map((tab) => {
+            const Icon = tab.icon;
+            const isActive = sidePanelTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  setSidePanelTab(tab.id);
+                  setIsSidePanelOpen(true);
+                }}
+                className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all relative ${
+                  isActive
+                    ? 'bg-white text-[#9C8DD4] shadow-minimal border border-black/5 font-bold'
+                    : 'text-[#757575] hover:text-[#212529] hover:bg-[#E2E1E6]/60'
+                }`}
+              >
+                <Icon className={`w-5 h-5 ${isActive ? 'text-[#9C8DD4]' : 'text-[#757575]'}`} />
+                <span className="text-[10px] mt-1 font-medium">{tab.label}</span>
+                {typeof tab.badge === 'number' && tab.badge > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-[#9C8DD4] text-white text-[9px] font-bold flex items-center justify-center">
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
-            {!currentFile ? (
-              <div className="py-8 flex flex-col items-center justify-center space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shadow-sm">
-                  <UploadCloud className="w-7 h-7" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-800">
-                    Click to select or drag & drop any file here
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Images, PDFs, Documents, Source Code (100% processed in local RAM)
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-between text-left">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600">
-                    <FileText className="w-5 h-5" />
+        {/* 2. Side Flyout Panel (Canva Drawer) */}
+        {isSidePanelOpen && (
+          <div className="w-full md:w-80 lg:w-96 border-b md:border-b-0 md:border-r border-black/5 bg-white flex flex-col shrink-0 overflow-y-auto max-h-[820px] transition-all">
+            {/* Drawer Header */}
+            <div className="p-4 border-b border-black/5 flex items-center justify-between">
+              <span className="text-xs font-bold text-[#212529] uppercase tracking-wider">
+                {sidePanelTab === 'uploads' && 'Upload Files'}
+                {sidePanelTab === 'templates' && 'Document Templates'}
+                {sidePanelTab === 'redaction' && 'Privacy Redaction'}
+                {sidePanelTab === 'synthetic' && 'Synthetic FPE Data'}
+                {sidePanelTab === 'ai' && 'WebGPU AI Reasoner'}
+                {sidePanelTab === 'export' && 'Export & Crypto'}
+              </span>
+              <button
+                onClick={() => setIsSidePanelOpen(false)}
+                className="p-1 hover:bg-[#FAF9F6] text-[#757575] hover:text-[#212529] rounded-lg transition-colors"
+                title="Collapse Panel"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Drawer Tab Content */}
+            <div className="p-4 space-y-4">
+              {/* TAB 1: UPLOADS */}
+              {sidePanelTab === 'uploads' && (
+                <div className="space-y-4">
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
+                      currentFile 
+                        ? 'border-[#9C8DD4] bg-[#FAF9F6]' 
+                        : 'border-black/10 hover:border-[#9C8DD4] bg-white'
+                    }`}
+                  >
+                    <input 
+                      ref={fileInputRef}
+                      type="file" 
+                      className="hidden" 
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files[0]) {
+                          handleProcessFile(e.target.files[0]);
+                        }
+                      }}
+                    />
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <div className="w-12 h-12 rounded-full bg-[#9C8DD4]/15 border border-[#9C8DD4]/30 flex items-center justify-center text-[#9C8DD4]">
+                        <UploadCloud className="w-6 h-6" />
+                      </div>
+                      <p className="text-xs font-bold text-[#212529]">
+                        Click to browse or drop file
+                      </p>
+                      <p className="text-[10px] text-[#757575]">
+                        PDF, PNG, JPG, or TXT
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-900">{currentFile.name}</h4>
-                    <p className="text-xs text-slate-500 font-mono">
-                      {(currentFile.size / 1024).toFixed(1)} KB • {currentFile.type || 'Unknown MIME'}
+
+                  {currentFile && (
+                    <div className="p-3.5 bg-[#FAF9F6] border border-black/5 rounded-2xl space-y-2">
+                      <div className="flex items-center gap-2.5">
+                        <FileText className="w-4 h-4 text-[#9C8DD4]" />
+                        <div className="overflow-hidden">
+                          <p className="text-xs font-bold text-[#212529] truncate">{currentFile.name}</p>
+                          <p className="text-[10px] text-[#757575] font-mono">
+                            {(currentFile.size / 1024).toFixed(1)} KB · {currentFile.type || 'Document'}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full py-1.5 bg-white hover:bg-[#E2E1E6] text-xs font-medium text-[#212529] rounded-xl border border-black/5 transition-all shadow-minimal"
+                      >
+                        Change File
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="p-3 bg-white border border-black/5 rounded-2xl space-y-1 text-xs text-[#757575]">
+                    <div className="font-bold text-[#212529] flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-[#4ADE80]" />
+                      <span>Zero-Cloud Privacy Invariant</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed">
+                      Files are read exclusively into your device's RAM. No backend servers, analytics, or model APIs receive your data.
                     </p>
                   </div>
                 </div>
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    fileInputRef.current?.click();
-                  }}
-                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700 rounded-lg border border-slate-200 transition-all"
+              )}
+
+              {/* TAB 2: TEMPLATES */}
+              {sidePanelTab === 'templates' && (
+                <div className="space-y-3">
+                  <p className="text-xs text-[#757575]">
+                    Select a preloaded benchmark document with simulated PII to test perception, mathematical checksums, and cryptographic redaction.
+                  </p>
+
+                  <div className="space-y-2.5">
+                    {/* Aadhaar Card Graphic Card */}
+                    <div
+                      onClick={() => handleLoadSample('ID')}
+                      className="p-3.5 rounded-2xl border border-black/5 bg-[#FAF9F6] hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-2 group"
+                    >
+                      <div className="h-1.5 w-full bg-gradient-to-r from-orange-400 via-white to-green-500 rounded-full" />
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <UserCheck className="w-4 h-4 text-[#9C8DD4]" />
+                          <span className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4]">
+                            Indian Aadhaar ID
+                          </span>
+                        </div>
+                        <span className="text-[9px] font-mono bg-white px-2 py-0.5 rounded-full border border-black/5 text-[#757575]">
+                          Verhoeff D₅
+                        </span>
+                      </div>
+                      <div className="p-2 bg-white rounded-xl border border-black/5 font-mono text-[11px] text-[#757575] flex items-center justify-between">
+                        <span>UID: 2345 •••• 0123</span>
+                        <span className="text-[#16A34A] font-bold text-[9px]">Valid Checksum</span>
+                      </div>
+                    </div>
+
+                    {/* PAN Card Graphic Card */}
+                    <div
+                      onClick={() => handleLoadSample('ID')}
+                      className="p-3.5 rounded-2xl border border-black/5 bg-[#FAF9F6] hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-2 group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <CreditCard className="w-4 h-4 text-[#9C8DD4]" />
+                          <span className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4]">
+                            Income Tax PAN Card
+                          </span>
+                        </div>
+                        <span className="text-[9px] font-mono bg-white px-2 py-0.5 rounded-full border border-black/5 text-[#757575]">
+                          Govt Tax ID
+                        </span>
+                      </div>
+                      <div className="p-2 bg-white rounded-xl border border-black/5 font-mono text-[11px] text-[#757575] flex items-center justify-between">
+                        <span>PAN: ABCDE1234F</span>
+                        <span className="text-[#9C8DD4] font-bold text-[9px]">Regex Match</span>
+                      </div>
+                    </div>
+
+                    {/* Financial Statement Graphic Card */}
+                    <div
+                      onClick={() => handleLoadSample('FINANCE')}
+                      className="p-3.5 rounded-2xl border border-black/5 bg-[#FAF9F6] hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-2 group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <CreditCard className="w-4 h-4 text-[#9C8DD4]" />
+                          <span className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4]">
+                            Financial Statement
+                          </span>
+                        </div>
+                        <span className="text-[9px] font-mono bg-white px-2 py-0.5 rounded-full border border-black/5 text-[#757575]">
+                          Luhn Mod-10
+                        </span>
+                      </div>
+                      <div className="p-2 bg-white rounded-xl border border-black/5 font-mono text-[11px] text-[#757575] flex items-center justify-between">
+                        <span>Card: 4532 •••• 1825</span>
+                        <span className="text-[#16A34A] font-bold text-[9px]">PCI-DSS</span>
+                      </div>
+                    </div>
+
+                    {/* API Secrets Graphic Card */}
+                    <div
+                      onClick={() => handleLoadSample('CODE')}
+                      className="p-3.5 rounded-2xl border border-black/5 bg-[#FAF9F6] hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-2 group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <FileCode className="w-4 h-4 text-[#9C8DD4]" />
+                          <span className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4]">
+                            Cloud API & Secrets
+                          </span>
+                        </div>
+                        <span className="text-[9px] font-mono bg-white px-2 py-0.5 rounded-full border border-black/5 text-[#757575]">
+                          Shannon Entropy
+                        </span>
+                      </div>
+                      <div className="p-2 bg-[#212529] text-white rounded-xl font-mono text-[10px] truncate">
+                        const OPENAI_KEY = "sk-proj-..."
+                      </div>
+                    </div>
+
+                    {/* Photo + Geotag Graphic Card */}
+                    <div
+                      onClick={() => handleLoadSample('PHOTO')}
+                      className="p-3.5 rounded-2xl border border-black/5 bg-[#FAF9F6] hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-2 group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-[#9C8DD4]" />
+                          <span className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4]">
+                            Photo + EXIF Geotag
+                          </span>
+                        </div>
+                        <span className="text-[9px] font-mono bg-white px-2 py-0.5 rounded-full border border-black/5 text-[#757575]">
+                          GPS Stripper
+                        </span>
+                      </div>
+                      <div className="p-2 bg-white rounded-xl border border-black/5 font-mono text-[11px] text-[#757575] flex items-center justify-between">
+                        <span>📍 28.6139° N, 77.2090° E</span>
+                        <span className="text-[#9C8DD4] font-bold text-[9px]">Neutralized</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: REDACTION */}
+              {sidePanelTab === 'redaction' && (
+                <div className="space-y-4">
+                  {/* Mode Selector */}
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] font-bold text-[#757575] uppercase tracking-wider">
+                      Preview Mode:
+                    </span>
+                    <div className="grid grid-cols-3 gap-1 bg-[#E2E1E6]/70 p-1 rounded-xl border border-black/5">
+                      <button
+                        onClick={() => setPreviewMode('ORIGINAL')}
+                        className={`py-1 text-xs font-medium rounded-lg transition-all ${
+                          previewMode === 'ORIGINAL'
+                            ? 'bg-white text-[#212529] font-bold shadow-minimal'
+                            : 'text-[#757575] hover:text-[#212529]'
+                        }`}
+                      >
+                        Original
+                      </button>
+                      <button
+                        onClick={() => setPreviewMode('BLURRED_REGIONS')}
+                        className={`py-1 text-xs font-medium rounded-lg transition-all ${
+                          previewMode === 'BLURRED_REGIONS'
+                            ? 'bg-[#9C8DD4] text-white font-bold shadow-minimal'
+                            : 'text-[#757575] hover:text-[#212529]'
+                        }`}
+                      >
+                        Masked
+                      </button>
+                      <button
+                        onClick={() => setPreviewMode('SYNTHETIC_DATA')}
+                        className={`py-1 text-xs font-medium rounded-lg transition-all ${
+                          previewMode === 'SYNTHETIC_DATA'
+                            ? 'bg-[#4ADE80] text-[#14532D] font-bold shadow-minimal'
+                            : 'text-[#757575] hover:text-[#212529]'
+                        }`}
+                      >
+                        Synthetic
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Blur Helpers */}
+                  {decision?.fileCategory === 'GOVERNMENT_ID' && (
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] font-bold text-[#757575] uppercase tracking-wider">
+                        Quick Add Masks:
+                      </span>
+                      <div className="flex flex-col gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleAddIdRegions('DEMOGRAPHIC')}
+                          className="w-full py-1.5 px-3 bg-[#FAF9F6] hover:bg-[#E2E1E6] text-[#212529] text-xs font-medium rounded-xl border border-black/5 transition-all text-left shadow-minimal flex items-center justify-between"
+                        >
+                          <span>+ Blur Demographic (Name/DOB)</span>
+                          <span className="text-[10px] text-[#9C8DD4] font-bold">Auto</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAddIdRegions('QR_CODE')}
+                          className="w-full py-1.5 px-3 bg-[#FAF9F6] hover:bg-[#E2E1E6] text-[#212529] text-xs font-medium rounded-xl border border-black/5 transition-all text-left shadow-minimal flex items-center justify-between"
+                        >
+                          <span>+ Blur QR Matrix</span>
+                          <span className="text-[10px] text-[#9C8DD4] font-bold">Auto</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Discovered Entities List */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-[#757575] uppercase tracking-widest">
+                        Detected Entities ({detection?.detectedItems.length || 0})
+                      </span>
+                      {detection && detection.detectedItems.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleClearAllRegions}
+                          className="text-[10px] text-[#757575] hover:text-[#E77A73] font-mono transition-colors"
+                        >
+                          Clear All
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5 max-h-[220px] overflow-y-auto pr-1">
+                      {!detection || detection.detectedItems.length === 0 ? (
+                        <p className="text-xs text-[#757575] italic">
+                          No entities detected yet. Drag on the canvas to draw custom boxes!
+                        </p>
+                      ) : (
+                        detection.detectedItems.map((item, idx) => {
+                          const isSelected = item.id === selectedItemId;
+                          const isLocalAi = item.source === 'LOCAL_AI';
+                          return (
+                            <div
+                              key={item.id || idx}
+                              onClick={() => {
+                                setSelectedItemId(item.id);
+                                if (item.pageNumber && detection.pages && item.pageNumber - 1 !== currentPageIndex) {
+                                  handlePageChange(item.pageNumber - 1);
+                                }
+                              }}
+                              className={`p-2 rounded-xl border text-xs font-mono flex items-center justify-between cursor-pointer transition-all ${
+                                isSelected
+                                  ? 'bg-[#FAF9F6] border-[#9C8DD4] text-[#212529] ring-1 ring-[#9C8DD4]/40 font-bold shadow-minimal'
+                                  : 'bg-[#FAF9F6] text-[#212529] border-black/5 hover:border-[#9C8DD4]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 truncate max-w-[190px]">
+                                {isLocalAi ? (
+                                  <Bot className="w-3.5 h-3.5 text-[#9C8DD4] shrink-0" />
+                                ) : (
+                                  <ShieldAlert className="w-3.5 h-3.5 text-[#9C8DD4] shrink-0" />
+                                )}
+                                <span className="truncate">{item.label}</span>
+                              </div>
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleScaleRegion(item.id, 0.15);
+                                  }}
+                                  className="px-1 text-[#757575] hover:text-[#212529] hover:bg-[#E2E1E6] rounded font-bold text-[10px]"
+                                  title="Expand +15%"
+                                >
+                                  +
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleScaleRegion(item.id, -0.15);
+                                  }}
+                                  className="px-1 text-[#757575] hover:text-[#212529] hover:bg-[#E2E1E6] rounded font-bold text-[10px]"
+                                  title="Shrink -15%"
+                                >
+                                  -
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteRegion(item.id);
+                                  }}
+                                  className="text-[#757575] hover:text-[#E77A73] p-0.5 rounded transition-colors ml-0.5"
+                                  title="Remove"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Selected Region Drawer */}
+                  {selectedItemId && detection?.detectedItems.some(i => i.id === selectedItemId) && (() => {
+                    const selectedItem = detection.detectedItems.find(i => i.id === selectedItemId)!;
+                    const mapping = syntheticMappings.find(m => m.id === selectedItemId);
+                    const currentSynVal = mapping ? mapping.syntheticValue : '';
+
+                    return (
+                      <div className="p-3.5 rounded-2xl bg-[#FAF9F6] border border-black/5 space-y-2.5 animate-fadeIn shadow-minimal">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-[#9C8DD4] uppercase tracking-wider">
+                            Selected Region
+                          </span>
+                          <span className="text-xs font-bold text-[#212529] truncate max-w-[150px]">
+                            {selectedItem.label}
+                          </span>
+                        </div>
+
+                        {/* Quick Type Chips */}
+                        <div className="space-y-1">
+                          <span className="text-[10px] text-[#757575]">Assign Field Type:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {([
+                              { type: 'AADHAAR', label: '🪪 Aadhaar' },
+                              { type: 'PAN_CARD', label: '💳 PAN' },
+                              { type: 'FACE', label: '👤 Face' },
+                              { type: 'DOB', label: '📅 DOB' },
+                              { type: 'EMAIL', label: '✉️ Email' },
+                              { type: 'CREDIT_CARD', label: '💳 Card' },
+                              { type: 'API_KEY', label: '🔑 Secret' },
+                              { type: 'CUSTOM', label: '🏷️ Custom' },
+                            ] as { type: PiiType; label: string }[]).map(t => (
+                              <button
+                                key={t.type}
+                                type="button"
+                                onClick={() => handleUpdateItemType(selectedItemId, t.type)}
+                                className={`px-2 py-0.5 text-[10px] font-semibold rounded-full border transition-all ${
+                                  selectedItem.type === t.type
+                                    ? 'bg-[#9C8DD4] text-white border-[#9C8DD4]'
+                                    : 'bg-white text-[#757575] border-black/5 hover:bg-[#E2E1E6]'
+                                }`}
+                              >
+                                {t.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Mock Value Input */}
+                        {selectedItem.type !== 'FACE' && (
+                          <div className="space-y-1">
+                            <span className="text-[10px] text-[#757575]">Synthetic Replacement:</span>
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={currentSynVal}
+                                onChange={(e) => handleUpdateSyntheticValue(selectedItemId, e.target.value)}
+                                placeholder="Enter custom mock data..."
+                                className="flex-1 px-3 py-1.5 bg-white border border-black/10 rounded-xl text-xs font-mono text-[#212529] focus:outline-none focus:ring-2 focus:ring-[#9C8DD4]/40 shadow-inner"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleRegenerateSyntheticValue(selectedItemId)}
+                                className="px-2.5 py-1.5 bg-white hover:bg-[#FAF9F6] text-[#212529] border border-black/10 rounded-xl text-xs font-semibold shadow-minimal shrink-0"
+                                title="Generate New Mock"
+                              >
+                                🎲
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* TAB 4: SYNTHETIC FPE */}
+              {sidePanelTab === 'synthetic' && (
+                <div className="space-y-3.5">
+                  <div className="p-3 bg-[#FAF9F6] border border-black/5 rounded-2xl space-y-1">
+                    <span className="text-xs font-bold text-[#212529] flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-[#9C8DD4]" />
+                      <span>Format-Preserving Encryption</span>
+                    </span>
+                    <p className="text-[11px] text-[#757575] leading-relaxed">
+                      Replaces sensitive PII with synthetically valid mock data that preserves formatting and satisfies mathematical checksums (Verhoeff D₅, Luhn Mod-10).
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-bold text-[#757575] uppercase tracking-widest">
+                      Active Synthetic Mappings ({syntheticMappings.length})
+                    </span>
+
+                    <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                      {syntheticMappings.length === 0 ? (
+                        <p className="text-xs text-[#757575] italic">
+                          No entities detected yet. Once a document is scanned, synthetic replacements appear here.
+                        </p>
+                      ) : (
+                        syntheticMappings.map((map, idx) => (
+                          <div key={map.id || idx} className="p-2.5 bg-[#FAF9F6] rounded-xl border border-black/5 text-xs space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-[10px] font-bold text-[#757575] uppercase">
+                                {map.type.replace(/_/g, ' ')}
+                              </span>
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-[#4ADE80]/20 text-[#14532D] font-mono">
+                                {map.checksumAlgorithm === 'VERHOEFF_D5'
+                                  ? '✓ Verhoeff D₅'
+                                  : map.checksumAlgorithm === 'LUHN_MOD10'
+                                  ? '✓ Luhn Mod-10'
+                                  : '✓ Valid Format'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                              <span className="text-[#757575] line-through truncate max-w-[100px]">{map.originalValue}</span>
+                              <span className="text-[#757575]">➔</span>
+                              <span className="text-[#14532D] font-bold truncate">{map.syntheticValue}</span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 5: AI AGENT */}
+              {sidePanelTab === 'ai' && (
+                <div className="space-y-4">
+                  {/* WebGPU Status Card */}
+                  <div className="p-3.5 bg-[#FAF9F6] border border-black/5 rounded-2xl space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Zap className="w-4 h-4 text-[#9C8DD4]" />
+                        <span className="text-xs font-bold text-[#212529]">Local WebGPU AI</span>
+                      </div>
+                      {aiHardwareInfo?.hasWebGpu ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#4ADE80]/15 text-[#14532D] font-mono">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#4ADE80] animate-pulse" />
+                          WebGPU Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#E2E1E6] text-[#212529] font-mono">
+                          <Cpu className="w-2.5 h-2.5 text-[#9C8DD4]" />
+                          WASM Engine
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleRunDeepAiScan}
+                      disabled={isAiScanning || isScanning}
+                      className={`w-full py-2.5 px-3 rounded-full text-xs font-semibold transition-all flex items-center justify-center gap-1.5 shadow-minimal ${
+                        deepAiRan
+                          ? 'bg-white hover:bg-[#E2E1E6] text-[#212529] border border-black/5'
+                          : 'bg-[#A99DD8] hover:bg-[#8A7BC7] text-white hover:shadow-purple-glow'
+                      } disabled:opacity-50`}
+                    >
+                      {isAiScanning ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Analyzing Context...</span>
+                        </>
+                      ) : deepAiRan ? (
+                        <>
+                          <CheckCircle className="w-3.5 h-3.5 text-[#16A34A]" />
+                          <span>Deep Scan Complete (Re-run)</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-white" />
+                          <span>Run Deep Context Scan</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Risk Score */}
+                  {decision && (
+                    <div className="p-3.5 bg-[#FAF9F6] border border-black/5 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-[#757575] uppercase tracking-widest">
+                          Risk Score:
+                        </span>
+                        <span className={`text-sm font-bold font-mono ${
+                          decision.riskScore >= 70 ? 'text-[#E77A73]' : decision.riskScore >= 40 ? 'text-amber-600' : 'text-[#16A34A]'
+                        }`}>
+                          {decision.riskScore}/100 {decision.riskScore >= 70 ? 'HIGH' : decision.riskScore >= 40 ? 'MED' : 'LOW'}
+                        </span>
+                      </div>
+                      <div className="w-full bg-[#E2E1E6] h-1.5 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full rounded-full ${
+                            decision.riskScore >= 70 ? 'bg-[#E77A73]' : decision.riskScore >= 40 ? 'bg-amber-400' : 'bg-[#4ADE80]'
+                          }`}
+                          style={{ width: `${Math.max(5, Math.min(100, decision.riskScore))}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Agent Rationale */}
+                  {decision && (
+                    <div className="p-3.5 bg-[#FAF9F6] border border-black/5 rounded-2xl space-y-2">
+                      <span className="text-[10px] font-bold text-[#757575] uppercase tracking-widest">
+                        Legal Rationale:
+                      </span>
+                      <p className="text-xs text-[#757575] leading-relaxed">
+                        {decision.explanation}
+                      </p>
+                      {decision.complianceTags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 pt-1">
+                          {decision.complianceTags.map((tag, i) => (
+                            <span key={i} className="px-2 py-0.5 bg-white text-[#212529] text-[9px] font-semibold rounded-full border border-black/5 font-mono">
+                              {tag.replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 6: EXPORT */}
+              {sidePanelTab === 'export' && (
+                <div className="space-y-4">
+                  {/* Action Directives */}
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-bold text-[#757575] uppercase tracking-widest">
+                      Action Directive:
+                    </span>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {(['ENCRYPT_REGION', 'ENCRYPT_FULL', 'SYNTHETIC_REPLACE', 'REDACT_METADATA', 'NO_ACTION'] as AgentAction[]).map((act) => (
+                        <button
+                          key={act}
+                          onClick={() => handleOverrideAction(act)}
+                          className={`p-2.5 rounded-xl border text-xs font-semibold text-left transition-all ${
+                            selectedAction === act
+                              ? 'bg-white border-2 border-[#9C8DD4] text-[#212529] font-bold shadow-minimal ring-1 ring-[#9C8DD4]/30'
+                              : 'bg-[#FAF9F6] border-black/5 text-[#757575] hover:text-[#212529]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span>{act === 'SYNTHETIC_REPLACE' ? '🎭 ' : ''}{act.replace(/_/g, ' ')}</span>
+                            {decision?.action === act && (
+                              <span className="text-[9px] bg-[#9C8DD4]/20 text-[#9C8DD4] px-2 py-0.5 rounded-full font-bold">
+                                Recommended
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Execute Button */}
+                  <button
+                    onClick={handleExecuteEncryption}
+                    disabled={isEncrypting || !selectedAction}
+                    className="w-full py-3 bg-[#A99DD8] hover:bg-[#8A7BC7] disabled:opacity-50 text-white font-bold rounded-full text-xs shadow-minimal hover:shadow-purple-glow transition-all flex items-center justify-center gap-2"
+                  >
+                    {isEncrypting ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Locking in Vault...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-4 h-4" />
+                        <span>Confirm & Lock Document</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Download links */}
+                  {encryptionSuccess && lastEncryptedFile && (
+                    <a
+                      href={lastEncryptedFile.downloadUrl}
+                      download={lastEncryptedFile.fileName}
+                      className="w-full py-2.5 bg-[#4ADE80] hover:bg-[#3ec470] text-[#14532D] font-bold rounded-full text-xs shadow-minimal transition-all flex items-center justify-center gap-2 text-center"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Download Encrypted File</span>
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 3. Center Document Stage (Canva Workspace Canvas) */}
+        <div className="flex-1 flex flex-col bg-[#FAF9F6] p-4 sm:p-6 overflow-hidden min-w-0 relative">
+          {/* Top Stage Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-4 border-b border-black/5">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xs font-bold text-[#212529]">
+                {currentFile ? currentFile.name : 'Interactive Privacy Stage'}
+              </span>
+              {currentFile && (
+                <span className="px-2 py-0.5 bg-white border border-black/5 rounded-full text-[10px] font-mono text-[#757575]">
+                  {(currentFile.size / 1024).toFixed(1)} KB
+                </span>
+              )}
+            </div>
+
+            {/* Multi-Page Navigation for PDFs */}
+            {detection?.pages && detection.pages.length > 1 && (
+              <div className="flex items-center gap-1.5 px-3 py-1 bg-white border border-black/5 rounded-full shadow-minimal">
+                <button
+                  type="button"
+                  disabled={currentPageIndex === 0}
+                  onClick={() => handlePageChange(currentPageIndex - 1)}
+                  className="px-2 py-0.5 text-xs font-bold rounded-full text-[#757575] hover:text-[#212529] disabled:opacity-30"
                 >
-                  Change File
+                  ◀
+                </button>
+                <span className="text-xs font-bold text-[#212529] font-mono px-1">
+                  Page {currentPageIndex + 1} / {detection.pages.length}
+                </span>
+                <button
+                  type="button"
+                  disabled={currentPageIndex === detection.pages.length - 1}
+                  onClick={() => handlePageChange(currentPageIndex + 1)}
+                  className="px-2 py-0.5 text-xs font-bold rounded-full text-[#757575] hover:text-[#212529] disabled:opacity-30"
+                >
+                  ▶
+                </button>
+              </div>
+            )}
+
+            {/* Stage Mode Switcher (if preview available) */}
+            {previewImageUrl && (
+              <div className="flex items-center gap-1 bg-white p-1 rounded-full border border-black/5 shadow-minimal">
+                <button
+                  onClick={() => setPreviewMode('ORIGINAL')}
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
+                    previewMode === 'ORIGINAL'
+                      ? 'bg-[#9C8DD4] text-white font-bold'
+                      : 'text-[#757575] hover:text-[#212529]'
+                  }`}
+                >
+                  Original
+                </button>
+                <button
+                  onClick={() => setPreviewMode('BLURRED_REGIONS')}
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
+                    previewMode === 'BLURRED_REGIONS'
+                      ? 'bg-[#9C8DD4] text-white font-bold'
+                      : 'text-[#757575] hover:text-[#212529]'
+                  }`}
+                >
+                  Masked
+                </button>
+                <button
+                  onClick={() => setPreviewMode('SYNTHETIC_DATA')}
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
+                    previewMode === 'SYNTHETIC_DATA'
+                      ? 'bg-[#4ADE80] text-[#14532D] font-bold'
+                      : 'text-[#757575] hover:text-[#212529]'
+                  }`}
+                >
+                  🎭 Synthetic
                 </button>
               </div>
             )}
           </div>
 
-          {/* Live Preview Canvas Container */}
-          {previewImageUrl && (
-            <div className="bg-white border border-slate-200/90 rounded-2xl p-4 space-y-3 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Live Visual Inspection & Redaction
-                </span>
-                <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+          {/* Stage Viewport */}
+          <div className="flex-1 flex flex-col items-center justify-center overflow-auto min-h-[460px]">
+            {isScanning ? (
+              <div className="p-8 text-center space-y-3">
+                <RefreshCw className="w-8 h-8 text-[#9C8DD4] animate-spin mx-auto" />
+                <p className="text-sm font-bold text-[#212529]">
+                  {aiModelProgress || 'Analyzing Document Locally...'}
+                </p>
+                <p className="text-xs text-[#757575]">
+                  Executing Tesseract WASM OCR, Face Detector, and Verhoeff/Luhn Checksums
+                </p>
+              </div>
+            ) : previewImageUrl ? (
+              <div className="space-y-3 w-full flex flex-col items-center">
+                <div 
+                  className="relative rounded-2xl overflow-hidden bg-[#212529] border border-black/5 flex items-center justify-center max-w-full select-none shadow-minimal"
+                  style={{ cursor: canvasCursor }}
+                >
+                  <canvas 
+                    ref={canvasRef} 
+                    onMouseDown={handleCanvasMouseDown}
+                    onMouseMove={handleCanvasMouseMove}
+                    onMouseUp={handleCanvasMouseUp}
+                    className="max-w-full max-h-[520px] object-contain rounded-xl"
+                  />
+                </div>
+                <p className="text-[11px] text-[#757575] font-mono text-center">
+                  💡 Drag on canvas to draw new redaction masks. Click any box to inspect & resize.
+                </p>
+              </div>
+            ) : (
+              /* When NO file is loaded: 3D Holographic Privacy Core & Visual Gallery */
+              <div className="w-full max-w-2xl text-center space-y-6 py-6">
+                {/* 3D Three.js Model */}
+                <ThreeStudioModel className="w-full h-56 sm:h-64" badgeText="Interactive 3D Cryptographic Sandbox" />
+
+                <div className="space-y-1.5">
+                  <h3 className="text-lg font-bold text-[#212529] tracking-tight">
+                    Welcome to the On-Device Privacy Studio
+                  </h3>
+                  <p className="text-xs text-[#757575] max-w-md mx-auto">
+                    Upload your own photo or document below, or select a pre-loaded benchmark scenario from the left tool panel to visually redact and cryptographically protect.
+                  </p>
+                </div>
+
+                {/* Primary Upload CTA Button */}
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
                   <button
-                    onClick={() => setPreviewMode('ORIGINAL')}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
-                      previewMode === 'ORIGINAL'
-                        ? 'bg-white text-slate-900 font-bold shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-[#A99DD8] hover:bg-[#8A7BC7] text-white font-bold text-xs shadow-minimal hover:shadow-purple-glow transition-all cursor-pointer"
                   >
-                    Original
+                    <UploadCloud className="w-4 h-4" />
+                    <span>Upload Photo or Document</span>
                   </button>
                   <button
-                    onClick={() => setPreviewMode('BLURRED_REGIONS')}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
-                      previewMode === 'BLURRED_REGIONS'
-                        ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
+                    onClick={() => {
+                      setSidePanelTab('templates');
+                      setIsSidePanelOpen(true);
+                    }}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white hover:bg-[#FAF9F6] text-[#212529] font-semibold text-xs border border-black/5 shadow-minimal transition-all cursor-pointer"
                   >
-                    Live Masked
-                  </button>
-                  <button
-                    onClick={() => setPreviewMode('SYNTHETIC_DATA')}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
-                      previewMode === 'SYNTHETIC_DATA'
-                        ? 'bg-emerald-600 text-white font-bold shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    🎭 Synthetic (FPE)
+                    <LayoutTemplate className="w-4 h-4 text-[#9C8DD4]" />
+                    <span>Browse Templates</span>
                   </button>
                 </div>
-              </div>
 
-              {/* Multi-Page Navigation Toolbar for PDFs and Multi-Page Documents */}
-              {detection?.pages && detection.pages.length > 1 && (
-                <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-indigo-50/80 border border-indigo-200/80 rounded-xl animate-fadeIn">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={currentPageIndex === 0}
-                      onClick={() => handlePageChange(currentPageIndex - 1)}
-                      className="px-2.5 py-1 text-xs font-bold rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm flex items-center gap-1 transition-all"
-                    >
-                      ◀ Prev
-                    </button>
-                    <span className="text-xs font-extrabold text-indigo-950 font-mono">
-                      Page {currentPageIndex + 1} of {detection.pages.length}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={currentPageIndex === detection.pages.length - 1}
-                      onClick={() => handlePageChange(currentPageIndex + 1)}
-                      className="px-2.5 py-1 text-xs font-bold rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm flex items-center gap-1 transition-all"
-                    >
-                      Next ▶
-                    </button>
+                {/* Visual Quick-Start Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2">
+                  <div
+                    onClick={() => handleLoadSample('ID')}
+                    className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
+                      <UserCheck className="w-4 h-4" />
+                    </div>
+                    <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Aadhaar & PAN</p>
+                    <p className="text-[10px] text-[#757575]">Verhoeff D₅ Check</p>
                   </div>
-                  <div className="flex items-center gap-1 overflow-x-auto max-w-full py-0.5">
-                    {detection.pages.map((p, idx) => (
-                      <button
-                        key={p.pageNumber}
-                        type="button"
-                        onClick={() => handlePageChange(idx)}
-                        className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all ${
-                          currentPageIndex === idx
-                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                            : 'bg-white text-slate-700 border-slate-200 hover:bg-indigo-100/60'
-                        }`}
-                      >
-                        Page {p.pageNumber} {p.detectedItems.length > 0 ? `(${p.detectedItems.length})` : ''}
-                      </button>
-                    ))}
+
+                  <div
+                    onClick={() => handleLoadSample('FINANCE')}
+                    className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
+                      <CreditCard className="w-4 h-4" />
+                    </div>
+                    <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Invoice</p>
+                    <p className="text-[10px] text-[#757575]">Luhn Mod-10 Check</p>
+                  </div>
+
+                  <div
+                    onClick={() => handleLoadSample('CODE')}
+                    className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
+                      <FileCode className="w-4 h-4" />
+                    </div>
+                    <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">API Secrets</p>
+                    <p className="text-[10px] text-[#757575]">Shannon Entropy</p>
+                  </div>
+
+                  <div
+                    onClick={() => handleLoadSample('PHOTO')}
+                    className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
+                      <MapPin className="w-4 h-4" />
+                    </div>
+                    <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Photo Geotag</p>
+                    <p className="text-[10px] text-[#757575]">EXIF Neutralizer</p>
                   </div>
                 </div>
-              )}
-
-              <div 
-                className="relative rounded-xl overflow-hidden bg-slate-900 border border-slate-200 flex items-center justify-center min-h-[260px] select-none shadow-inner"
-                style={{ cursor: canvasCursor }}
-              >
-                <canvas 
-                  ref={canvasRef} 
-                  onMouseDown={handleCanvasMouseDown}
-                  onMouseMove={handleCanvasMouseMove}
-                  onMouseUp={handleCanvasMouseUp}
-                  className="max-w-full max-h-[420px] object-contain rounded-lg"
-                />
               </div>
+            )}
+          </div>
+        </div>
+      </div>
 
-              {/* Interactive Redaction Toolbar */}
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <span className="text-[11px] text-indigo-700 flex items-center gap-1.5 font-mono">
-                  <span>💡</span> Click any box to resize with corner handles, drag to move, or draw new
-                </span>
-                {decision?.fileCategory === 'GOVERNMENT_ID' && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleAddIdRegions('DEMOGRAPHIC')}
-                      className="px-2.5 py-1 bg-slate-50 hover:bg-indigo-50 text-indigo-700 text-[11px] font-medium rounded-lg border border-slate-200 transition-all"
-                    >
-                      + Blur Demographic (Name/DOB)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAddIdRegions('QR_CODE')}
-                      className="px-2.5 py-1 bg-slate-50 hover:bg-indigo-50 text-indigo-700 text-[11px] font-medium rounded-lg border border-slate-200 transition-all"
-                    >
-                      + Blur QR Matrix
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Selected Field Properties & Custom Synthetic Input Drawer */}
-              {selectedItemId && detection?.detectedItems.some(i => i.id === selectedItemId) && (() => {
-                const selectedItem = detection.detectedItems.find(i => i.id === selectedItemId)!;
-                const mapping = syntheticMappings.find(m => m.id === selectedItemId);
-                const currentSynVal = mapping ? mapping.syntheticValue : '';
-
-                return (
-                  <div className="p-3.5 rounded-xl bg-indigo-50/80 border border-indigo-200 space-y-3 animate-fadeIn shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white text-[11px] font-bold">
-                          🎯 Selected Field
-                        </span>
-                        <span className="text-xs font-bold text-slate-800 truncate max-w-[220px]">
-                          {selectedItem.label}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleScaleRegion(selectedItemId, 0.15)}
-                          className="px-2 py-0.5 bg-white hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded border border-indigo-200 shadow-sm"
-                          title="Expand boundary"
-                        >
-                          +15%
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleScaleRegion(selectedItemId, -0.15)}
-                          className="px-2 py-0.5 bg-white hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded border border-indigo-200 shadow-sm"
-                          title="Shrink boundary"
-                        >
-                          -15%
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteRegion(selectedItemId)}
-                          className="p-1 bg-white hover:bg-rose-100 text-rose-600 rounded border border-rose-200 ml-1 transition-colors shadow-sm"
-                          title="Delete this region"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Entity Type Picker */}
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                        Assign Field Type:
-                      </span>
-                      <div className="flex flex-wrap gap-1">
-                        {([
-                          { type: 'AADHAAR', label: '🪪 Aadhaar' },
-                          { type: 'PAN_CARD', label: '💳 PAN Card' },
-                          { type: 'FACE', label: '👤 Face Photo' },
-                          { type: 'DOB', label: '📅 Date of Birth' },
-                          { type: 'EMAIL', label: '✉️ Email' },
-                          { type: 'PHONE', label: '📞 Phone' },
-                          { type: 'CREDIT_CARD', label: '💳 Card' },
-                          { type: 'API_KEY', label: '🔑 Secret' },
-                          { type: 'MEDICAL_CONDITION', label: '🏥 Medical / PHI' },
-                          { type: 'TRADE_SECRET', label: '🔒 Trade Secret' },
-                          { type: 'ORGANIZATION', label: '🏢 Institution' },
-                          { type: 'LEGAL_CLAUSE', label: '📜 Legal Clause' },
-                          { type: 'CUSTOM', label: '🏷️ Name/Text' },
-                        ] as { type: PiiType; label: string }[]).map(t => (
-                          <button
-                            key={t.type}
-                            type="button"
-                            onClick={() => handleUpdateItemType(selectedItemId, t.type)}
-                            className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition-all ${
-                              selectedItem.type === t.type
-                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                                : 'bg-white text-slate-700 border-slate-200 hover:bg-indigo-50'
-                            }`}
-                          >
-                            {t.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Custom Synthetic Value Input */}
-                    {selectedItem.type !== 'FACE' ? (
-                      <div className="space-y-1.5 pt-1">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                            Custom Synthetic Mock Value:
-                          </label>
-                          {mapping?.checksumValidated && (
-                            <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200">
-                              {mapping.checksumAlgorithm === 'VERHOEFF_D5'
-                                ? '✓ Verhoeff D5 Valid'
-                                : mapping.checksumAlgorithm === 'LUHN_MOD10'
-                                ? '✓ Luhn Mod-10 Valid'
-                                : '✓ Valid Format'}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="text"
-                            value={currentSynVal}
-                            onChange={(e) => handleUpdateSyntheticValue(selectedItemId, e.target.value)}
-                            placeholder="Enter custom mock data (e.g. 9876 5432 1098)..."
-                            className="flex-1 px-3 py-1.5 bg-white border border-indigo-200 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-inner"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleRegenerateSyntheticValue(selectedItemId)}
-                            className="px-2.5 py-1.5 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all shadow-sm shrink-0"
-                            title="Generate a random checksum-compliant mock value for this type"
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                            <span>🎲 New Mock</span>
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="p-2 bg-white rounded-lg border border-indigo-100 flex items-center justify-between text-xs">
-                        <span className="text-slate-600 font-medium">
-                          👤 Authentic Synthetic Passport Portrait Active
-                        </span>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          AI Inpainted
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-          )}
+      {/* 🌟 Safety & Hardware Telemetry Bento Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+        <div className="bg-white p-4 rounded-2xl border border-black/5 shadow-minimal">
+          <div className="flex items-center gap-2 text-[#9C8DD4]">
+            <Brain className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wider font-mono">On-Device SLM</span>
+          </div>
+          <p className="text-xs font-bold text-[#212529] mt-1">DistilBERT ONNX</p>
+          <p className="text-[11px] text-[#757575]">66M Params · WebAssembly SIMD</p>
         </div>
 
-        {/* Right Column: Multi-Agent Reasoning, Risk Gauges & Action Confirmation */}
-        <div className="lg:col-span-5 space-y-4">
-          {isScanning && (
-            <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3 shadow-sm">
-              <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mx-auto" />
-              <h4 className="text-sm font-bold text-slate-900">
-                {aiModelProgress || 'Analyzing Document Locally...'}
-              </h4>
-              <p className="text-xs text-slate-500">
-                {aiModelProgress
-                  ? 'Executing Transformers.js on-device neural classifier...'
-                  : 'Running Tesseract OCR, Face Cascade Worker, and Deterministic Regex Matchers'}
-              </p>
-            </div>
-          )}
+        <div className="bg-white p-4 rounded-2xl border border-black/5 shadow-minimal">
+          <div className="flex items-center gap-2 text-[#9C8DD4]">
+            <Scan className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Perception AI</span>
+          </div>
+          <p className="text-xs font-bold text-[#212529] mt-1">LSTM OCR & Biometrics</p>
+          <p className="text-[11px] text-[#757575]">Tesseract WASM + Face Worker</p>
+        </div>
 
-          {decision && detection && !isScanning && (
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-5 shadow-sm">
-              {/* Local WebGPU AI Assistant Control Panel */}
-              <div className="bg-gradient-to-br from-purple-900/95 via-indigo-900/90 to-slate-900 text-white rounded-2xl p-4 border border-purple-500/30 shadow-lg space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-purple-500/20 border border-purple-400/40 flex items-center justify-center text-purple-300">
-                      <Zap className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <span>Local WebGPU AI Assistant</span>
-                        <span className="inline-flex items-center px-1.5 py-0.2 text-[9px] font-extrabold rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                          ON-DEVICE SLM
-                        </span>
-                      </h4>
-                      <p className="text-[10px] text-slate-300">
-                        Zero-Data-Exfiltration Semantic NER & Clause Reasoner
-                      </p>
-                    </div>
-                  </div>
+        <div className="bg-white p-4 rounded-2xl border border-black/5 shadow-minimal">
+          <div className="flex items-center gap-2 text-[#4ADE80]">
+            <ShieldCheck className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Zero-Cloud Vault</span>
+          </div>
+          <p className="text-xs font-bold text-[#212529] mt-1">AES-256-GCM Envelope</p>
+          <p className="text-[11px] text-[#757575]">WebAuthn PRF Hardware Key</p>
+        </div>
 
-                  {/* Hardware Status Badge */}
-                  <div className="text-right">
-                    {aiHardwareInfo?.hasWebGpu ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        WebGPU Active
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono">
-                        <Cpu className="w-2.5 h-2.5" />
-                        WASM CPU Engine
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Hardware details subtext */}
-                <div className="flex items-center justify-between text-[10px] text-slate-300 px-2.5 py-1.5 rounded-lg bg-black/20 border border-white/5 font-mono">
-                  <span className="truncate max-w-[220px]" title={aiHardwareInfo?.adapterName}>
-                    Device: {aiHardwareInfo?.adapterName || 'In-Browser Runtime'}
-                  </span>
-                  <span className="text-purple-300">
-                    {aiModelStatus.loaded ? '✓ Model Cached' : aiModelStatus.loading ? 'Compiling...' : 'Zero-Shot NER Ready'}
-                  </span>
-                </div>
-
-                {/* Model Download / Progress Bar if loading */}
-                {aiModelStatus.loading && (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[10px] text-purple-200">
-                      <span>{aiModelStatus.statusText}</span>
-                      <span>{aiModelStatus.progressPercent}%</span>
-                    </div>
-                    <div className="w-full bg-purple-950/60 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className="bg-gradient-to-r from-purple-400 to-indigo-400 h-full transition-all duration-300"
-                        style={{ width: `${aiModelStatus.progressPercent}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Deep AI Scan Action Button */}
-                <button
-                  type="button"
-                  onClick={handleRunDeepAiScan}
-                  disabled={isAiScanning || isScanning}
-                  className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-md ${
-                    deepAiRan
-                      ? 'bg-purple-600/40 hover:bg-purple-600/60 text-purple-200 border border-purple-400/40'
-                      : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-purple-600/30'
-                  } disabled:opacity-50`}
-                >
-                  {isAiScanning ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Analyzing Health & Legal Context via WebGPU...</span>
-                    </>
-                  ) : deepAiRan ? (
-                    <>
-                      <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Deep Context Scan Complete (Re-run)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
-                      <span>⚡ Run Deep Context AI Scan (Medical / Legal / Secrets)</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* Category & Risk Score Header */}
-              <div className="flex items-start justify-between border-b border-slate-100 pb-4">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    CLASSIFIED CATEGORY
-                  </span>
-                  <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2 mt-0.5">
-                    {decision.fileCategory.replace(/_/g, ' ')}
-                  </h3>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    RISK SCORE
-                  </span>
-                  <div className={`text-lg font-black ${
-                    decision.riskScore >= 70 ? 'text-rose-600' : decision.riskScore >= 40 ? 'text-amber-600' : 'text-emerald-600'
-                  }`}>
-                    {decision.riskScore}/100
-                  </div>
-                </div>
-              </div>
-
-              {/* Detected Items Pill List */}
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    Discovered Sensitive Entities ({detection.detectedItems.length})
-                  </span>
-                  {detection.detectedItems.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleClearAllRegions}
-                      className="text-[10px] text-slate-400 hover:text-rose-600 font-mono transition-colors"
-                    >
-                      Clear All
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap gap-1.5 mt-2 max-h-[160px] overflow-y-auto pr-1">
-                  {detection.detectedItems.length === 0 ? (
-                    <span className="text-xs text-slate-400 italic">No structured PII found (you can drag custom boxes on the preview)</span>
-                  ) : (
-                    detection.detectedItems.map((item, idx) => {
-                      const isSelected = item.id === selectedItemId;
-                      const isLocalAi = item.source === 'LOCAL_AI';
-                      return (
-                        <div
-                          key={item.id || idx}
-                          onClick={() => {
-                            setSelectedItemId(item.id);
-                            if (item.pageNumber && detection.pages && item.pageNumber - 1 !== currentPageIndex) {
-                              handlePageChange(item.pageNumber - 1);
-                            }
-                          }}
-                          className={`group px-2.5 py-1 text-xs rounded-lg border font-mono flex items-center gap-1.5 cursor-pointer transition-all ${
-                            isSelected
-                              ? isLocalAi
-                                ? 'bg-purple-100 border-purple-500 text-purple-950 shadow-sm'
-                                : 'bg-indigo-50 border-indigo-400 text-indigo-900 shadow-sm'
-                              : isLocalAi
-                              ? 'bg-purple-50/80 text-purple-900 border-purple-300 hover:border-purple-400'
-                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-indigo-300'
-                          }`}
-                        >
-                          {isLocalAi ? (
-                            <Bot className={`w-3 h-3 shrink-0 ${isSelected ? 'text-purple-700' : 'text-purple-600'}`} />
-                          ) : (
-                            <ShieldAlert className={`w-3 h-3 shrink-0 ${isSelected ? 'text-indigo-600' : 'text-amber-600'}`} />
-                          )}
-                          {isLocalAi && (
-                            <span className="px-1 py-0.2 bg-purple-200 text-purple-900 text-[9px] font-extrabold rounded">
-                              🤖 AI
-                            </span>
-                          )}
-                          {item.pageNumber && detection.pages && detection.pages.length > 1 && (
-                            <span className="px-1 py-0.5 bg-indigo-100 text-indigo-800 text-[9px] font-bold rounded">
-                              p.{item.pageNumber}
-                            </span>
-                          )}
-                          <span 
-                            title={item.value ? `${item.label}: ${item.value}` : item.label}
-                            className="truncate max-w-[200px]"
-                          >
-                            {item.label}
-                          </span>
-
-                          {/* Quick Scale Buttons */}
-                          <div className="flex items-center gap-0.5 ml-1 pl-1 border-l border-slate-200">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleScaleRegion(item.id, 0.15);
-                              }}
-                              title="Expand boundary (+15%)"
-                              className="px-1 text-slate-500 hover:text-indigo-600 hover:bg-slate-200 rounded font-bold text-[10px] transition-colors"
-                            >
-                              +
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleScaleRegion(item.id, -0.15);
-                              }}
-                              title="Shrink boundary (-15%)"
-                              className="px-1 text-slate-500 hover:text-indigo-600 hover:bg-slate-200 rounded font-bold text-[10px] transition-colors"
-                            >
-                              -
-                            </button>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteRegion(item.id);
-                            }}
-                            title="Remove this redacted region"
-                            className="ml-0.5 text-slate-400 hover:text-rose-600 p-0.5 rounded hover:bg-slate-200 transition-colors"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              {/* Explainer Agent Rationale & Compliance Tags */}
-              <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 space-y-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                  Agent Reasoning & Legal Context
-                </div>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  {decision.explanation}
-                </p>
-
-                {decision.complianceTags.length > 0 && (
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {decision.complianceTags.map((tag, i) => (
-                      <span key={i} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-bold rounded border border-indigo-200 font-mono">
-                        {tag.replace(/_/g, ' ')}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Discovered EXIF & Hardware Metadata Inspector */}
-              {(detection.exif.hasGps || detection.exif.deviceMake || detection.exif.deviceModel || detection.exif.dateTime || detection.exif.software || detection.detectedItems.some(i => i.type.startsWith('EXIF_'))) && (
-                <div className="bg-purple-50 rounded-xl p-3.5 border border-purple-200 space-y-2.5 animate-fadeIn">
-                  <div className="flex items-center justify-between text-xs font-bold text-purple-900">
-                    <div className="flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-purple-600" />
-                      <span>Discovered EXIF & Hardware Metadata</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {detection.exif.isDemoSample && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 font-bold tracking-wide">
-                          Demo Sample Data
-                        </span>
-                      )}
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200 font-medium">
-                        Stripped on Redact
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    {detection.exif.hasGps && (
-                      <div className="p-2 bg-white rounded-lg border border-purple-200 space-y-0.5 col-span-2">
-                        <span className="text-[10px] text-purple-700 font-semibold uppercase tracking-wider block">
-                          📍 GPS Geotag Location
-                        </span>
-                        <p className="font-mono text-slate-800 font-bold text-xs">
-                          {detection.exif.latitude?.toFixed(5)}° N, {detection.exif.longitude?.toFixed(5)}° E
-                          {detection.exif.altitude ? ` (${detection.exif.altitude.toFixed(0)}m alt)` : ''}
-                        </p>
-                      </div>
-                    )}
-
-                    {(detection.exif.deviceMake || detection.exif.deviceModel) && (
-                      <div className="p-2 bg-white rounded-lg border border-purple-200 space-y-0.5">
-                        <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">
-                          📷 Camera / Device
-                        </span>
-                        <p className="font-mono text-slate-800 font-bold text-xs">
-                          {detection.exif.deviceMake} {detection.exif.deviceModel}
-                        </p>
-                      </div>
-                    )}
-
-                    {detection.exif.dateTime && (
-                      <div className="p-2 bg-white rounded-lg border border-purple-200 space-y-0.5">
-                        <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">
-                          🕒 Original Timestamp
-                        </span>
-                        <p className="font-mono text-slate-800 font-bold text-xs">
-                          {detection.exif.dateTime}
-                        </p>
-                      </div>
-                    )}
-
-                    {detection.exif.software && (
-                      <div className="p-2 bg-white rounded-lg border border-purple-200 space-y-0.5 col-span-2">
-                        <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">
-                          ⚙️ Software / Firmware
-                        </span>
-                        <p className="font-mono text-slate-800 font-bold text-xs">
-                          {detection.exif.software}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Format-Preserving Synthetic Entity Mappings Inspector (FPE) */}
-              {syntheticMappings.length > 0 && (
-                <div className="bg-emerald-50/80 rounded-xl p-3.5 border border-emerald-200 space-y-2.5 animate-fadeIn">
-                  <div className="flex items-center justify-between text-xs font-bold text-emerald-950">
-                    <div className="flex items-center gap-1.5">
-                      <span>🎭</span>
-                      <span>Format-Preserving Synthetic Mappings</span>
-                    </div>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold font-mono">
-                      100% On-Device FPE
-                    </span>
-                  </div>
-
-                  <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
-                    {syntheticMappings.map((map, idx) => (
-                      <div key={map.id || idx} className="p-2 bg-white rounded-lg border border-emerald-200 text-xs space-y-1 shadow-sm">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono text-[10px] font-bold text-slate-500 uppercase">
-                            {map.type.replace(/_/g, ' ')}
-                          </span>
-                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
-                            {map.checksumAlgorithm === 'VERHOEFF_D5'
-                              ? '✓ Verhoeff D5 Valid'
-                              : map.checksumAlgorithm === 'LUHN_MOD10'
-                              ? '✓ Luhn Mod-10 Valid'
-                              : '✓ Format Preserved'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5 font-mono text-[11px]">
-                          <span className="text-slate-400 line-through truncate max-w-[120px]">{map.originalValue}</span>
-                          <span className="text-slate-400">➔</span>
-                          <span className="text-emerald-700 font-bold truncate">{map.syntheticValue}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Human-in-the-Loop Action Override Selection */}
-              <div className="space-y-2">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                  Action Directive {customActionOverridden && <span className="text-amber-600 font-semibold">(User Overridden)</span>}
-                </span>
-
-                <div className="grid grid-cols-2 gap-2">
-                  {(['ENCRYPT_REGION', 'ENCRYPT_FULL', 'SYNTHETIC_REPLACE', 'REDACT_METADATA', 'NO_ACTION'] as AgentAction[]).map((act) => (
-                    <button
-                      key={act}
-                      onClick={() => handleOverrideAction(act)}
-                      className={`p-2.5 rounded-xl border text-xs font-bold text-left transition-all ${
-                        selectedAction === act
-                          ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm'
-                          : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                      } ${act === 'SYNTHETIC_REPLACE' ? 'col-span-2 bg-emerald-50/50 border-emerald-300 hover:bg-emerald-50' : ''}`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
-                          {act === 'SYNTHETIC_REPLACE' ? '🎭 ' : ''}
-                          {act.replace(/_/g, ' ')}
-                        </span>
-                        {decision.action === act && (
-                          <span className="text-[9px] bg-indigo-100 text-indigo-800 px-1.5 py-0.5 rounded font-bold">
-                            Rec
-                          </span>
-                        )}
-                        {act === 'SYNTHETIC_REPLACE' && (
-                          <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold">
-                            FPE Mock Data
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Final Execution Button */}
-              <button
-                onClick={handleExecuteEncryption}
-                disabled={isEncrypting || !selectedAction}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-xl text-sm shadow-md shadow-indigo-500/25 transition-all flex items-center justify-center gap-2"
-              >
-                {isEncrypting ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    Executing Cryptography...
-                  </>
-                ) : (
-                  <>
-                    <Lock className="w-4 h-4" />
-                    Confirm & Execute ({selectedAction?.replace(/_/g, ' ')})
-                  </>
-                )}
-              </button>
-
-              {encryptionSuccess && lastEncryptedFile && (
-                <a
-                  href={lastEncryptedFile.downloadUrl}
-                  download={lastEncryptedFile.fileName}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Download Encrypted File ({lastEncryptedFile.fileName})</span>
-                </a>
-              )}
-            </div>
-          )}
+        <div className="bg-white p-4 rounded-2xl border border-black/5 shadow-minimal">
+          <div className="flex items-center gap-2 text-[#9C8DD4]">
+            <Sparkles className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Math Guarantees</span>
+          </div>
+          <p className="text-xs font-bold text-[#212529] mt-1">Dihedral D₅ & Luhn</p>
+          <p className="text-[11px] text-[#757575]">Zero False Positive Checksums</p>
         </div>
       </div>
     </div>

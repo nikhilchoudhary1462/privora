@@ -458,27 +458,27 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Header */}
-      <div className="p-6 rounded-2xl bg-white border border-slate-200/90 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="p-6 rounded-2xl bg-white border border-black/5 shadow-minimal flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 font-sans">
         <div>
-          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+          <h2 className="text-base font-bold text-[#212529] flex items-center gap-2">
             <span>Direct P2P Encrypted Sharing (Workflow 3)</span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold">
+            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-[#E2E1E6] text-[#757575] font-semibold">
               Zero Servers
             </span>
           </h2>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-[#757575] mt-1">
             Browser-to-browser encrypted file sync with zero cloud relay.
           </p>
         </div>
 
         {/* Share Mode Selector */}
-        <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+        <div className="flex items-center gap-1 bg-[#E2E1E6]/70 p-1 rounded-full border border-black/5">
           <button
             onClick={() => setShareMethod('INSTANT')}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${
+            className={`px-4 py-1.5 text-xs font-semibold rounded-full flex items-center gap-1.5 transition-all ${
               shareMethod === 'INSTANT'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-[#A99DD8] text-white shadow-minimal'
+                : 'text-[#757575] hover:text-[#212529]'
             }`}
           >
             <Zap className="w-3.5 h-3.5" />
@@ -486,10 +486,10 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
           </button>
           <button
             onClick={() => setShareMethod('QR_CODE')}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${
+            className={`px-4 py-1.5 text-xs font-semibold rounded-full flex items-center gap-1.5 transition-all ${
               shareMethod === 'QR_CODE'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-[#A99DD8] text-white shadow-minimal'
+                : 'text-[#757575] hover:text-[#212529]'
             }`}
           >
             <QrCode className="w-3.5 h-3.5" />

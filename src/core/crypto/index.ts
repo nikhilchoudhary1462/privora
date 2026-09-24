@@ -200,7 +200,9 @@ export class CryptoEngine {
   static async encryptImageRegions(
     imgElement: HTMLImageElement | HTMLCanvasElement,
     regions: { box: BoundingBox; type: any }[],
-    dek: CryptoKey
+    dek: CryptoKey,
+    outputMimeType?: string,
+    outputQuality?: number
   ): Promise<{
     maskedImageDataUrl: string;
     encryptedRegionRecords: EncryptedRegionRecord[];
@@ -273,16 +275,47 @@ export class CryptoEngine {
       ctx.restore();
     }
 
-    const maskedImageDataUrl = canvas.toDataURL('image/png');
+    const mime = outputMimeType || 'image/png';
+    const quality = outputQuality ?? 0.90;
+    const maskedImageDataUrl = mime === 'image/png' ? canvas.toDataURL('image/png') : canvas.toDataURL(mime, quality);
     return { maskedImageDataUrl, encryptedRegionRecords };
   }
 
-  // In-Place Region Restoration over target base image
+  /**
+   * Estimates an appropriate JPEG/WebP encoding quality based on bytes-per-pixel ratio
+   * to prevent re-encoded images from ballooning past their input compression level.
+   */
+  static estimateJpegQualityFromSize(byteSize: number, width: number, height: number): number {
+    if (!byteSize || !width || !height || width <= 0 || height <= 0) return 0.85;
+
+    const totalPixels = width * height;
+    const bytesPerPixel = byteSize / totalPixels;
+
+    let quality: number;
+    if (bytesPerPixel <= 0.08) {
+      quality = 0.50 + (bytesPerPixel / 0.08) * 0.15; // 0.50 .. 0.65 (heavy compression)
+    } else if (bytesPerPixel <= 0.20) {
+      quality = 0.65 + ((bytesPerPixel - 0.08) / 0.12) * 0.15; // 0.65 .. 0.80 (moderate compression)
+    } else if (bytesPerPixel <= 0.40) {
+      quality = 0.80 + ((bytesPerPixel - 0.20) / 0.20) * 0.10; // 0.80 .. 0.90 (standard web quality)
+    } else {
+      quality = 0.90 + Math.min(0.02, ((bytesPerPixel - 0.40) / 0.40) * 0.02); // 0.90 .. 0.92 (high quality)
+    }
+
+    return Math.min(0.95, Math.max(0.40, Math.round(quality * 100) / 100));
+  }
+
+  // In-Place Region Restoration over target base image with adaptive compression preservation
   static async decryptImageRegions(
     targetImageSource: string,
     regionRecords: EncryptedRegionRecord[],
     dek: CryptoKey,
-    originalDimensions?: { width: number; height: number }
+    originalDimensions?: { width: number; height: number },
+    outputOptions?: {
+      mimeType?: string;
+      quality?: number;
+      targetByteSize?: number;
+    }
   ): Promise<string> {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -337,7 +370,23 @@ export class CryptoEngine {
             }
           }
 
-          resolve(canvas.toDataURL('image/png'));
+          // Determine output format and compression quality
+          let outMime = outputOptions?.mimeType;
+          if (!outMime) {
+            if (targetImageSource.startsWith('data:image/jpeg')) outMime = 'image/jpeg';
+            else if (targetImageSource.startsWith('data:image/webp')) outMime = 'image/webp';
+            else outMime = 'image/png';
+          }
+
+          if (outMime === 'image/jpeg' || outMime === 'image/webp') {
+            let outQuality = outputOptions?.quality;
+            if (outQuality === undefined && outputOptions?.targetByteSize) {
+              outQuality = this.estimateJpegQualityFromSize(outputOptions.targetByteSize, canvas.width, canvas.height);
+            }
+            resolve(canvas.toDataURL(outMime, outQuality ?? 0.88));
+          } else {
+            resolve(canvas.toDataURL('image/png'));
+          }
         } catch (e) {
           reject(e);
         }

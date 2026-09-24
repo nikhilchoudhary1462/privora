@@ -102,6 +102,24 @@ describe('Web Crypto Subsystem (AES-256-GCM, RSA-OAEP & SHA-256)', () => {
 
     expect(originalHash).not.toBe(tamperedHash);
   });
+
+  it('should estimate adaptive JPEG quality from byte size to preserve compression', () => {
+    // 800x600 = 480,000 pixels.
+    // Heavy compressed: 30KB = 30720 bytes => ~0.064 bytes/px => quality in [0.50, 0.65]
+    const heavyQuality = CryptoEngine.estimateJpegQualityFromSize(30720, 800, 600);
+    expect(heavyQuality).toBeGreaterThanOrEqual(0.50);
+    expect(heavyQuality).toBeLessThanOrEqual(0.65);
+
+    // Standard compressed: 120KB = 122880 bytes => ~0.25 bytes/px => quality in [0.80, 0.90]
+    const stdQuality = CryptoEngine.estimateJpegQualityFromSize(122880, 800, 600);
+    expect(stdQuality).toBeGreaterThanOrEqual(0.80);
+    expect(stdQuality).toBeLessThanOrEqual(0.90);
+
+    // Large high quality: 500KB = 512000 bytes => >1 byte/px => quality ~0.92
+    const highQuality = CryptoEngine.estimateJpegQualityFromSize(512000, 800, 600);
+    expect(highQuality).toBeGreaterThanOrEqual(0.90);
+    expect(highQuality).toBeLessThanOrEqual(0.95);
+  });
 });
 
 describe('Agentic Decision Layer & Policy Rules', () => {

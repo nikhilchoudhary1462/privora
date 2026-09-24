@@ -3,16 +3,12 @@ import {
   Activity, 
   ShieldAlert, 
   ShieldCheck, 
-  AlertTriangle, 
   Download, 
-  Filter, 
   RefreshCw, 
   Clock, 
   Layers, 
   Lock, 
-  Eye, 
-  Zap, 
-  FileCheck2 
+  Zap
 } from 'lucide-react';
 import { AuditLogEvent, AnomalyReport, EncryptedFileRecord } from '../types';
 import { vaultDB } from '../core/storage/db';
@@ -60,7 +56,7 @@ export const AuditDashboard: React.FC = () => {
     const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(logs, null, 2));
     const a = document.createElement('a');
     a.href = dataStr;
-    a.download = `aegis_local_audit_log_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `privora_local_audit_log_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
   };
 
@@ -71,16 +67,16 @@ export const AuditDashboard: React.FC = () => {
   const totalTamperEvents = logs.filter(l => l.eventType === 'TAMPER_ALERT' || l.tamperDetected).length;
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 max-w-7xl mx-auto font-sans">
       
       {/* Header */}
-      <div className="p-5 rounded-2xl bg-white border border-slate-200/90 shadow-sm flex flex-wrap items-center justify-between gap-4">
+      <div className="p-5 rounded-2xl bg-white border border-black/5 shadow-minimal flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-indigo-600" />
+          <h3 className="text-base font-bold text-[#212529] flex items-center gap-2">
+            <Activity className="w-5 h-5 text-[#9C8DD4]" />
             <span>Local Privacy & Audit Dashboard (F1, F4)</span>
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-[#757575] mt-0.5">
             100% On-Device Audit Trail · Zero Telemetry Sent Outside This Browser
           </p>
         </div>
@@ -88,17 +84,17 @@ export const AuditDashboard: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             onClick={exportAuditLogJson}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-xs text-slate-700 border border-slate-200 transition-all font-medium"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#FAF9F6] hover:bg-[#E2E1E6] text-xs text-[#212529] border border-black/5 transition-all font-medium shadow-minimal"
           >
             <Download className="w-3.5 h-3.5" />
-            Export JSON
+            <span>Export JSON</span>
           </button>
           <button
             onClick={loadData}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-xs text-slate-700 border border-slate-200 transition-all font-medium"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#FAF9F6] hover:bg-[#E2E1E6] text-xs text-[#212529] border border-black/5 transition-all font-medium shadow-minimal"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            Refresh
+            <span>Refresh</span>
           </button>
         </div>
       </div>
@@ -106,42 +102,42 @@ export const AuditDashboard: React.FC = () => {
       {/* Analytics Summary Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         
-        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500">
+        <div className="p-5 rounded-2xl bg-white border border-black/5 shadow-minimal flex flex-col justify-between">
+          <div className="flex items-center justify-between text-[#757575]">
             <span className="text-xs font-bold">Files in Vault</span>
-            <Lock className="w-4 h-4 text-indigo-600" />
+            <Lock className="w-4 h-4 text-[#9C8DD4]" />
           </div>
-          <div className="text-2xl font-black text-slate-900 font-mono mt-2">{files.length}</div>
-          <span className="text-[10px] text-indigo-600 font-mono font-bold mt-1">AES-256-GCM Wrapped</span>
+          <div className="text-3xl font-light text-[#212529] font-mono mt-3">{files.length}</div>
+          <span className="font-mono text-[9px] text-[#9C8DD4] uppercase tracking-wider font-semibold mt-2">AES-256-GCM Wrapped</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500">
+        <div className="p-5 rounded-2xl bg-white border border-black/5 shadow-minimal flex flex-col justify-between">
+          <div className="flex items-center justify-between text-[#757575]">
             <span className="text-xs font-bold">Total Scans</span>
-            <Zap className="w-4 h-4 text-purple-600" />
+            <Zap className="w-4 h-4 text-[#9C8DD4]" />
           </div>
-          <div className="text-2xl font-black text-slate-900 font-mono mt-2">{totalScanned}</div>
-          <span className="text-[10px] text-purple-600 font-mono font-bold mt-1">OCR / Face / Regex / EXIF</span>
+          <div className="text-3xl font-light text-[#212529] font-mono mt-3">{totalScanned}</div>
+          <span className="font-mono text-[9px] text-[#9C8DD4] uppercase tracking-wider font-semibold mt-2">OCR / Face / Checksum</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500">
+        <div className="p-5 rounded-2xl bg-white border border-black/5 shadow-minimal flex flex-col justify-between">
+          <div className="flex items-center justify-between text-[#757575]">
             <span className="text-xs font-bold">User Overrides</span>
-            <Layers className="w-4 h-4 text-amber-600" />
+            <Layers className="w-4 h-4 text-[#9C8DD4]" />
           </div>
-          <div className="text-2xl font-black text-slate-900 font-mono mt-2">{totalOverrides}</div>
-          <span className="text-[10px] text-amber-600 font-mono font-bold mt-1">Self-Correction Feed</span>
+          <div className="text-3xl font-light text-[#212529] font-mono mt-3">{totalOverrides}</div>
+          <span className="font-mono text-[9px] text-[#9C8DD4] uppercase tracking-wider font-semibold mt-2">Self-Correction Feed</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500">
+        <div className="p-5 rounded-2xl bg-white border border-black/5 shadow-minimal flex flex-col justify-between">
+          <div className="flex items-center justify-between text-[#757575]">
             <span className="text-xs font-bold">Integrity State</span>
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            <ShieldCheck className="w-4 h-4 text-[#4ADE80]" />
           </div>
-          <div className="text-2xl font-black text-emerald-600 font-mono mt-2">
+          <div className="text-3xl font-light text-[#4ADE80] font-mono mt-3">
             {totalTamperEvents === 0 ? '100% OK' : `${totalTamperEvents} ALERTS`}
           </div>
-          <span className="text-[10px] text-emerald-600 font-mono font-bold mt-1">SHA-256 Verified</span>
+          <span className="font-mono text-[9px] text-[#4ADE80] uppercase tracking-wider font-semibold mt-2">SHA-256 Verified</span>
         </div>
 
       </div>
@@ -149,7 +145,7 @@ export const AuditDashboard: React.FC = () => {
       {/* Anomaly Alerts Section (F2) */}
       {anomalies.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-xs font-bold text-rose-600">
+          <div className="flex items-center gap-2 text-xs font-bold text-[#E77A73]">
             <ShieldAlert className="w-4 h-4" />
             <span>Active Local Anomaly Alerts ({anomalies.length}):</span>
           </div>
@@ -158,17 +154,17 @@ export const AuditDashboard: React.FC = () => {
             {anomalies.map((anom) => (
               <div
                 key={anom.id}
-                className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs space-y-1.5 shadow-sm"
+                className="p-4 rounded-2xl bg-[#E77A73]/10 border border-[#E77A73]/25 text-[#212529] text-xs space-y-1.5 shadow-minimal"
               >
                 <div className="flex justify-between items-center font-bold">
-                  <span className="text-rose-700 font-extrabold">🚨 {anom.type.replace(/_/g, ' ')}</span>
-                  <span className="px-2 py-0.5 rounded bg-rose-100 text-[10px] font-mono text-rose-800 font-bold border border-rose-300">
+                  <span className="text-[#E77A73] font-bold">🚨 {anom.type.replace(/_/g, ' ')}</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-[#E77A73]/15 text-[10px] font-mono text-[#E77A73] font-bold border border-[#E77A73]/30">
                     {anom.severity}
                   </span>
                 </div>
-                <p className="text-slate-700">{anom.description}</p>
-                <p className="text-rose-700 text-[11px]">
-                  <strong>Action:</strong> {anom.recommendedAction}
+                <p className="text-[#212529]">{anom.description}</p>
+                <p className="text-[#757575] text-[11px]">
+                  <strong className="text-[#E77A73]">Action:</strong> {anom.recommendedAction}
                 </p>
               </div>
             ))}
@@ -177,24 +173,24 @@ export const AuditDashboard: React.FC = () => {
       )}
 
       {/* Audit Log Stream (F1) */}
-      <div className="p-5 rounded-2xl bg-white border border-slate-200/90 space-y-4 shadow-sm">
+      <div className="p-6 rounded-2xl bg-white border border-black/5 space-y-4 shadow-minimal">
         
         {/* Filter Controls */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
-            <Clock className="w-4 h-4 text-indigo-600" />
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-black/5">
+          <div className="flex items-center gap-2 text-xs font-bold text-[#212529]">
+            <Clock className="w-4 h-4 text-[#9C8DD4]" />
             <span>Unified Chronological Event Feed ({filteredLogs.length})</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <div className="flex flex-wrap items-center gap-1 text-xs">
             {['ALL', 'DETECT', 'CLASSIFY', 'ENCRYPT', 'DECRYPT', 'VIEW_MEMORY', 'OVERRIDE', 'AUTH_UNLOCK', 'TAMPER_ALERT'].map((type) => (
               <button
                 key={type}
                 onClick={() => setFilterType(type)}
-                className={`px-2.5 py-1 rounded-lg font-mono text-[11px] transition-all ${
+                className={`px-3 py-1 rounded-full font-mono text-[10px] transition-all ${
                   filterType === type
-                    ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+                    ? 'bg-[#A99DD8] text-white font-bold shadow-minimal'
+                    : 'bg-[#FAF9F6] text-[#757575] hover:text-[#212529] border border-black/5'
                 }`}
               >
                 {type}
@@ -203,53 +199,47 @@ export const AuditDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Logs Table / Cards */}
-        {loading ? (
-          <div className="p-8 text-center text-xs text-slate-400">Loading audit records...</div>
-        ) : filteredLogs.length === 0 ? (
-          <div className="p-8 text-center text-xs text-slate-400">No audit events match current filter.</div>
+        {/* Log Entries List */}
+        {filteredLogs.length === 0 ? (
+          <div className="p-8 text-center text-xs text-[#757575] bg-[#FAF9F6] rounded-2xl border border-black/5">
+            No audit events found for selected filter.
+          </div>
         ) : (
-          <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-            {filteredLogs.map((log) => (
-              <div
-                key={log.id}
-                className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs hover:border-indigo-300 transition-all"
-              >
-                <div className="flex items-start sm:items-center gap-2.5">
-                  <span
-                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold shrink-0 ${
-                      log.eventType === 'ENCRYPT'
-                        ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                        : log.eventType === 'DECRYPT' || log.eventType === 'VIEW_MEMORY'
-                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : log.eventType === 'TAMPER_ALERT' || log.severity === 'ALERT'
-                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                        : log.eventType === 'OVERRIDE'
-                        ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                        : 'bg-slate-100 text-slate-700 border border-slate-200'
-                    }`}
-                  >
-                    {log.eventType}
-                  </span>
-
-                  <div>
-                    <span className="font-semibold text-slate-900">{log.actionTaken}</span>
-                    {log.fileName && (
-                      <span className="ml-2 font-mono text-[11px] text-indigo-600 font-bold">
-                        [{log.fileName}]
+          <div className="space-y-2 max-h-[500px] overflow-y-auto">
+            {filteredLogs.map((log) => {
+              const isAlert = log.severity === 'DANGER' || log.severity === 'ALERT';
+              return (
+                <div
+                  key={log.id}
+                  className={`p-3.5 rounded-2xl border text-xs transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-minimal ${
+                    isAlert
+                      ? 'bg-[#E77A73]/10 border-[#E77A73]/25'
+                      : 'bg-[#FAF9F6] border-black/5'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-white border border-black/5 text-[#212529] font-bold">
+                        {log.eventType}
                       </span>
-                    )}
+                      <span className="text-[#212529] font-semibold">{log.actionTaken}</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#757575] font-mono">
+                      <span>Source: <strong className="text-[#212529]">{log.source}</strong></span>
+                      {log.fileName && <span>· File: <strong className="text-[#212529]">{log.fileName}</strong></span>}
+                      {log.riskScore !== undefined && (
+                        <span>· Risk: <strong className="text-[#9C8DD4]">{log.riskScore}/100</strong></span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="text-[10px] font-mono text-[#757575] whitespace-nowrap self-start sm:self-center">
+                    {new Date(log.timestamp).toLocaleTimeString()}
                   </div>
                 </div>
-
-                <div className="flex items-center gap-3 shrink-0 text-slate-500 font-mono text-[11px]">
-                  <span className="px-1.5 py-0.5 rounded bg-white text-[10px] text-slate-600 border border-slate-200">
-                    {log.source}
-                  </span>
-                  <span>{new Date(log.timestamp).toLocaleTimeString()}</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
