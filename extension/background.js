@@ -35,6 +35,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+
+  if (message.type === 'FETCH_BLOB' && message.url) {
+    fetch(message.url)
+      .then(res => res.blob())
+      .then(blob => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          sendResponse({ success: true, dataUrl: reader.result, mimeType: blob.type });
+        };
+        reader.readAsDataURL(blob);
+      })
+      .catch(err => {
+        sendResponse({ success: false, error: err.message });
+      });
+    return true;
+  }
 });
 
 // Monitor Completed Downloads for Automatic Vault Matching & Tab Notification

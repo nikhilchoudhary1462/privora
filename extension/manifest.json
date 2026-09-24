@@ -5,6 +5,7 @@
   "description": "100% on-device real-time PII detection, agentic redaction, and cryptography for any website.",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "activeTab",
     "downloads"
   ],

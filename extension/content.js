@@ -380,11 +380,16 @@
   // -------------------------------------------------------------
   // Automatic Sensitive Region & Face Detection Engine
   // -------------------------------------------------------------
+  window._privoraRecentManifests = window._privoraRecentManifests || [];
+
   function detectFaceOrSensitiveRegions(canvas, fileName) {
     const w = canvas.width;
     const h = canvas.height;
     const fn = (fileName || '').toLowerCase();
     const boxes = [];
+
+    const isPan = fn.includes('pan');
+    const isAadhaar = fn.includes('aadhaar') || fn.includes('adhar') || fn.includes('uid');
 
     try {
       const scale = Math.min(1, 240 / Math.max(w, h));
@@ -426,31 +431,81 @@
       const cardY = Math.round(cardTop / scale);
       const cardH = Math.max(80, Math.round((cardBottom - cardTop) / scale));
 
-      // 2. Locate Face Photo (scan left 32% of card where portrait photos are placed on Aadhaar / ID cards)
-      let minX = sw, maxX = 0, minY = sh, maxY = 0, skinCount = 0;
-      const leftBoundX = Math.round(sw * 0.32);
+      // 2. Scan entire card for Face Photo skin-tone clusters (both left and right halves)
+      let minXLeft = sw, maxXLeft = 0, minYLeft = sh, maxYLeft = 0, skinLeft = 0;
+      let minXRight = sw, maxXRight = 0, minYRight = sh, maxYRight = 0, skinRight = 0;
+      const midX = Math.round(sw * 0.50);
+
       for (let y = cardTop; y <= cardBottom; y++) {
-        for (let x = 0; x <= leftBoundX; x++) {
+        for (let x = 0; x < sw; x++) {
           const i = (y * sw + x) * 4;
           const r = d[i], g = d[i + 1], b = d[i + 2];
           // Standard human skin-tone range in RGB
           if (r > 95 && g > 40 && b > 20 && (Math.max(r, g, b) - Math.min(r, g, b) > 15) && Math.abs(r - g) > 15 && r > g && r > b) {
-            skinCount++;
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
+            if (x < midX) {
+              skinLeft++;
+              if (x < minXLeft) minXLeft = x;
+              if (x > maxXLeft) maxXLeft = x;
+              if (y < minYLeft) minYLeft = y;
+              if (y > maxYLeft) maxYLeft = y;
+            } else {
+              skinRight++;
+              if (x < minXRight) minXRight = x;
+              if (x > maxXRight) maxXRight = x;
+              if (y < minYRight) minYRight = y;
+              if (y > maxYRight) maxYRight = y;
+            }
           }
         }
       }
 
-      // Add Photo Box (strictly covering portrait photo on left)
-      if (skinCount > 20 && maxX > minX && maxY > minY) {
-        // Use card proportions bounded by skin cluster for hair-to-neck coverage
+      // Check whether this document is a PAN card (either by filename or photo on the right)
+      const isPanCard = isPan || (!isAadhaar && skinRight > skinLeft + 25 && skinRight > 30);
+
+      if (isPanCard) {
+        // --- PAN CARD PROTECTION: PHOTO + PAN NUMBER ONLY ---
+        // 1. Photo: if right skin cluster found, use right; if left skin cluster found, use left; else standard right slot
+        if (skinRight > 20 && maxXRight > minXRight && maxYRight > minYRight) {
+          const fX = Math.max(Math.round(w * 0.55), Math.round((minXRight - 6) / scale));
+          const fY = Math.max(cardY, Math.min(Math.round((minYRight - 15) / scale), Math.round(cardY + cardH * 0.25)));
+          const fW = Math.min(w - fX, Math.max(Math.round(w * 0.20), Math.round((maxXRight - minXRight + 12) / scale)));
+          const fH = Math.min(Math.round(cardH * 0.70), Math.max(Math.round(cardH * 0.38), Math.round((maxYRight + 15) / scale) - fY));
+          boxes.push({ x: fX, y: fY, width: fW, height: fH, label: 'Face Photo' });
+        } else if (skinLeft > 20 && maxXLeft > minXLeft && maxYLeft > minYLeft) {
+          const fX = 0;
+          const fY = Math.max(cardY, Math.min(Math.round((minYLeft - 15) / scale), Math.round(cardY + cardH * 0.25)));
+          const fW = Math.min(Math.round(w * 0.25), Math.max(Math.round(w * 0.20), Math.round((maxXLeft + 10) / scale)));
+          const fH = Math.min(Math.round(cardH * 0.70), Math.max(Math.round(cardH * 0.38), Math.round((maxYLeft + 15) / scale) - fY));
+          boxes.push({ x: fX, y: fY, width: fW, height: fH, label: 'Face Photo' });
+        } else {
+          // Standard PAN card portrait slot (right side)
+          boxes.push({
+            x: Math.round(w * 0.68),
+            y: Math.round(cardY + cardH * 0.32),
+            width: Math.round(w * 0.26),
+            height: Math.round(cardH * 0.48),
+            label: 'Face Photo'
+          });
+        }
+
+        // 2. PAN Number: strictly the 10-character PAN number row in the center-left
+        boxes.push({
+          x: Math.round(w * 0.16),
+          y: Math.round(cardY + cardH * 0.48),
+          width: Math.round(w * 0.52),
+          height: Math.round(cardH * 0.16),
+          label: 'PAN Number'
+        });
+
+        return boxes;
+      }
+
+      // --- AADHAAR CARD PROTECTION: PHOTO + AADHAAR NUMBER ONLY ---
+      if (skinLeft > 20 && maxXLeft > minXLeft && maxYLeft > minYLeft) {
         const fX = 0;
-        const fY = Math.max(cardY, Math.min(Math.round((minY - 15) / scale), Math.round(cardY + cardH * 0.18)));
-        const fW = Math.min(Math.round(w * 0.24), Math.max(Math.round(w * 0.20), Math.round((maxX + 10) / scale)));
-        const fH = Math.min(Math.round(cardH * 0.74), Math.max(Math.round(cardH * 0.40), Math.round((maxY + 15) / scale) - fY));
+        const fY = Math.max(cardY, Math.min(Math.round((minYLeft - 15) / scale), Math.round(cardY + cardH * 0.18)));
+        const fW = Math.min(Math.round(w * 0.24), Math.max(Math.round(w * 0.20), Math.round((maxXLeft + 10) / scale)));
+        const fH = Math.min(Math.round(cardH * 0.74), Math.max(Math.round(cardH * 0.40), Math.round((maxYLeft + 15) / scale) - fY));
         boxes.push({
           x: fX,
           y: fY,
@@ -459,7 +514,6 @@
           label: 'Face Photo'
         });
       } else {
-        // Standard left portrait frame for identity cards
         boxes.push({
           x: 0,
           y: Math.round(cardY + cardH * 0.18),
@@ -486,7 +540,12 @@
       return boxes;
     } catch (err) {
       console.warn('[Privora] Auto-shield region detection error:', err);
-      // Failsafe strictly for Photo + Aadhaar Number
+      if (isPan) {
+        return [
+          { x: Math.round(w * 0.68), y: Math.round(h * 0.32), width: Math.round(w * 0.26), height: Math.round(h * 0.48), label: 'Face Photo' },
+          { x: Math.round(w * 0.16), y: Math.round(h * 0.48), width: Math.round(w * 0.52), height: Math.round(h * 0.16), label: 'PAN Number' }
+        ];
+      }
       return [
         {
           x: 0,
@@ -507,15 +566,24 @@
   }
 
   function saveManifest(manifest) {
+    // 1. Maintain instant in-memory session cache
+    window._privoraRecentManifests = window._privoraRecentManifests || [];
+    window._privoraRecentManifests.unshift(manifest);
+    if (window._privoraRecentManifests.length > 25) {
+      window._privoraRecentManifests.length = 25;
+    }
+
+    // 2. Persist to extension storage
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+      chrome.storage.local.get(['aegis_active_manifests'], (res) => {
         const active = res.aegis_active_manifests || [];
-        const enc = res.aegis_encrypted_manifests || [];
         active.unshift(manifest);
-        enc.unshift(manifest);
         chrome.storage.local.set({
-          aegis_active_manifests: active.slice(0, 50),
-          aegis_encrypted_manifests: enc.slice(0, 50),
+          aegis_active_manifests: active.slice(0, 15),
+        }, () => {
+          if (chrome.runtime.lastError) {
+            console.warn('[Privora Shield] Storage set warning:', chrome.runtime.lastError.message);
+          }
         });
       });
     }
@@ -587,9 +655,13 @@
             // 2. Extract unblurred slices for retrace/decryption
             const unblurredSlices = [];
             detectedBoxes.forEach((box) => {
+              const maxDim = 380;
+              const sScale = Math.min(1, maxDim / Math.max(box.width, box.height, 1));
+              const sW = Math.max(1, Math.round(box.width * sScale));
+              const sH = Math.max(1, Math.round(box.height * sScale));
               const cropCanvas = document.createElement('canvas');
-              cropCanvas.width = Math.max(1, Math.round(box.width));
-              cropCanvas.height = Math.max(1, Math.round(box.height));
+              cropCanvas.width = sW;
+              cropCanvas.height = sH;
               const cCtx = cropCanvas.getContext('2d');
               if (cCtx) {
                 cCtx.drawImage(
@@ -600,15 +672,15 @@
                   Math.round(box.height),
                   0,
                   0,
-                  cropCanvas.width,
-                  cropCanvas.height
+                  sW,
+                  sH
                 );
                 unblurredSlices.push({
                   normX: box.x / canvas.width,
                   normY: box.y / canvas.height,
                   normW: box.width / canvas.width,
                   normH: box.height / canvas.height,
-                  cropDataUrl: cropCanvas.toDataURL('image/png'),
+                  cropDataUrl: cropCanvas.toDataURL('image/jpeg', 0.88),
                   label: box.label || 'Protected Region',
                 });
               }
@@ -2238,22 +2310,44 @@
   // 7. Automatic Download Interceptor & In-Place Retracer
   // -------------------------------------------------------------
   async function retraceAndRestoreImage(imageBlob, fileName) {
-    if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return null;
+    const memoryManifests = window._privoraRecentManifests || [];
 
     return new Promise((resolve) => {
-      chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], async (res) => {
-        const manifests = [...(res.aegis_active_manifests || []), ...(res.aegis_encrypted_manifests || [])];
+      const executeRestore = async (storageManifests) => {
+        const manifests = [...memoryManifests, ...(storageManifests || [])];
         if (manifests.length === 0) {
           resolve(null);
           return;
         }
 
         const candidate = (fileName || '').toLowerCase();
-        const matched = manifests.find(m => {
+        const candidateIsPan = candidate.includes('pan');
+        const candidateIsAadhaar = candidate.includes('aadhaar') || candidate.includes('adhar');
+
+        // Match Priority 1: Exact or substring match of filename base
+        let matched = manifests.find(m => {
           const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
           const fBase = candidate.replace(/\.[^/.]+$/, '').toLowerCase();
-          return (mBase && (fBase.includes(mBase) || mBase.includes(fBase))) || (m.hostname && m.hostname === window.location.hostname);
-        }) || (manifests.length > 0 && Date.now() - manifests[0].timestamp < 30 * 60 * 1000 ? manifests[0] : null);
+          return mBase && fBase && (fBase.includes(mBase) || mBase.includes(fBase));
+        });
+
+        // Match Priority 2: Document type keyword match (PAN matches PAN, Aadhaar matches Aadhaar)
+        if (!matched && (candidateIsPan || candidateIsAadhaar)) {
+          matched = manifests.find(m => {
+            const mFn = (m.fileName || '').toLowerCase();
+            return (candidateIsPan && mFn.includes('pan')) || (candidateIsAadhaar && (mFn.includes('aadhaar') || mFn.includes('adhar')));
+          });
+        }
+
+        // Match Priority 3: Same site / hostname match
+        if (!matched) {
+          matched = manifests.find(m => m.hostname && m.hostname === window.location.hostname);
+        }
+
+        // Match Priority 4: Most recent session
+        if (!matched && manifests.length > 0 && Date.now() - manifests[0].timestamp < 30 * 60 * 1000) {
+          matched = manifests[0];
+        }
 
         if (!matched || !matched.slices || matched.slices.length === 0) {
           resolve(null);
@@ -2313,7 +2407,15 @@
           resolve(null);
         };
         img.src = url;
-      });
+      };
+
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(['aegis_active_manifests'], (res) => {
+          executeRestore(res?.aegis_active_manifests || []);
+        });
+      } else {
+        executeRestore([]);
+      }
     });
   }
 
@@ -2326,23 +2428,41 @@
     const isImageDownload = downloadAttr !== null || href.match(/\.(png|jpe?g|webp|svg)$/i) || href.startsWith('blob:') || href.startsWith('data:image/');
 
     if (!isImageDownload || !href) return false;
-    if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return false;
 
     return new Promise((resolve) => {
-      chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], async (res) => {
-        const manifests = [...(res.aegis_active_manifests || []), ...(res.aegis_encrypted_manifests || [])];
+      const memoryManifests = window._privoraRecentManifests || [];
+      const checkAndIntercept = async (storageManifests) => {
+        const manifests = [...memoryManifests, ...(storageManifests || [])];
         if (manifests.length === 0) {
           resolve(false);
           return;
         }
 
         const candidateName = downloadAttr || (href.split('/').pop().split('?')[0]) || 'downloaded_image.png';
+        const candidate = candidateName.toLowerCase();
+        const candidateIsPan = candidate.includes('pan');
+        const candidateIsAadhaar = candidate.includes('aadhaar') || candidate.includes('adhar');
 
-        const matched = manifests.find(m => {
+        let matched = manifests.find(m => {
           const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
-          const fBase = candidateName.replace(/\.[^/.]+$/, '').toLowerCase();
-          return (mBase && (fBase.includes(mBase) || mBase.includes(fBase))) || (m.hostname && m.hostname === window.location.hostname);
-        }) || (manifests.length > 0 && Date.now() - manifests[0].timestamp < 30 * 60 * 1000 ? manifests[0] : null);
+          const fBase = candidate.replace(/\.[^/.]+$/, '').toLowerCase();
+          return mBase && fBase && (fBase.includes(mBase) || mBase.includes(fBase));
+        });
+
+        if (!matched && (candidateIsPan || candidateIsAadhaar)) {
+          matched = manifests.find(m => {
+            const mFn = (m.fileName || '').toLowerCase();
+            return (candidateIsPan && mFn.includes('pan')) || (candidateIsAadhaar && (mFn.includes('aadhaar') || mFn.includes('adhar')));
+          });
+        }
+
+        if (!matched) {
+          matched = manifests.find(m => m.hostname && m.hostname === window.location.hostname);
+        }
+
+        if (!matched && manifests.length > 0 && Date.now() - manifests[0].timestamp < 30 * 60 * 1000) {
+          matched = manifests[0];
+        }
 
         if (!matched || !matched.slices || matched.slices.length === 0) {
           resolve(false);
@@ -2367,7 +2487,20 @@
             const r = await fetch(href);
             blob = await r.blob();
           } else {
-            blob = await fetch(href).then(r => r.blob());
+            try {
+              blob = await fetch(href).then(r => r.blob());
+            } catch (fetchErr) {
+              // Bypass CORS using background script if needed
+              const resp = await new Promise((res) => {
+                chrome.runtime.sendMessage({ type: 'FETCH_BLOB', url: href }, res);
+              });
+              if (resp && resp.success && resp.dataUrl) {
+                const r = await fetch(resp.dataUrl);
+                blob = await r.blob();
+              } else {
+                throw fetchErr;
+              }
+            }
           }
 
           const result = await retraceAndRestoreImage(blob, candidateName);
@@ -2411,7 +2544,15 @@
           target.click();
           resolve(false);
         }
-      });
+      };
+
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(['aegis_active_manifests'], (res) => {
+          checkAndIntercept(res?.aegis_active_manifests || []);
+        });
+      } else {
+        checkAndIntercept([]);
+      }
     });
   }
 
@@ -2472,100 +2613,11 @@
   // 8. In-Page Floating Retrace Hub
   // -------------------------------------------------------------
   function updateFloatingHub() {
-    let hub = document.getElementById('aegis-floating-hub');
-    if (!hub) {
-      hub = document.createElement('div');
-      hub.id = 'aegis-floating-hub';
-      hub.style.cssText = `
-        position: fixed;
-        bottom: 16px;
-        right: 16px;
-        z-index: 2147483640;
-        background: #090d16;
-        border: 1px solid #06b6d4;
-        border-radius: 14px;
-        padding: 10px 14px;
-        color: #f8fafc;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(6, 182, 212, 0.2);
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 12px;
-      `;
-      document.documentElement.appendChild(hub);
-    }
-
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['aegis_active_manifests'], (res) => {
-        const manifests = res.aegis_active_manifests || [];
-        if (manifests.length === 0) {
-          hub.style.display = 'none';
-          return;
-        }
-
-        hub.style.display = 'flex';
-        hub.innerHTML = `
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-size:16px;">🛡️</span>
-            <div>
-              <strong style="color:#38bdf8; display:block; font-size:11px;">Privora Active</strong>
-              <span style="color:#94a3b8; font-size:10px;">${manifests.length} Document(s) Protected</span>
-            </div>
-          </div>
-          <button id="aegis-retrace-btn" style="background:#0284c7; color:#f8fafc; border:none; border-radius:8px; padding:6px 10px; font-size:11px; font-weight:bold; cursor:pointer;">
-            🔄 Retrace Any Download
-          </button>
-          <button id="aegis-reset-hub-btn" style="background:#331016; color:#f87171; border:1px solid #991b1b; border-radius:8px; padding:6px 8px; font-size:11px; font-weight:bold; cursor:pointer;" title="Clear active session records">
-            ✕
-          </button>
-        `;
-
-        const resetBtn = document.getElementById('aegis-reset-hub-btn');
-        if (resetBtn) {
-          resetBtn.onclick = () => {
-            chrome.storage.local.set({ aegis_active_manifests: [] }, () => {
-              hub.style.display = 'none';
-              showToast('Privora: Active protection session cleared.');
-            });
-          };
-        }
-
-        const btn = document.getElementById('aegis-retrace-btn');
-        if (btn) {
-          btn.onclick = () => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = 'image/*';
-            input.dataset.aegisSanitized = 'true';
-            input.dataset.aegisRetrace = 'true';
-            input.onchange = async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              const result = await retraceAndRestoreImage(file, file.name);
-              const restoredBlob = result?.blob || (result instanceof Blob ? result : null);
-              if (restoredBlob) {
-                const url = URL.createObjectURL(restoredBlob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'restored_' + file.name;
-                a.dataset.aegisRestored = 'true';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                setTimeout(() => URL.revokeObjectURL(url), 1000);
-
-                const inKb = result?.inputSize ? (result.inputSize / 1024).toFixed(1) : (file.size / 1024).toFixed(1);
-                const outKb = result?.restoredSize ? (result.restoredSize / 1024).toFixed(1) : (restoredBlob.size / 1024).toFixed(1);
-                showToast(`✨ Privora: Retraced & restored unblurred regions — ${inKb}KB → ${outKb}KB on "${a.download}"!`);
-              } else {
-                alert('No matching Privora encryption session found for this file.');
-              }
-            };
-            input.click();
-          };
-        }
-      });
+    // Keep function declaration for vitest, but completely suppress annoying bottom-right banner
+    const hub = document.getElementById('aegis-floating-hub');
+    if (hub) {
+      hub.style.display = 'none';
+      hub.remove();
     }
   }
 
