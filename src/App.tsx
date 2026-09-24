@@ -7,11 +7,12 @@ import { ChatAssistant } from './components/ChatAssistant';
 import { P2PShareModal } from './components/P2PShareModal';
 import { AuditDashboard } from './components/AuditDashboard';
 import { MasterKeyModal } from './components/MasterKeyModal';
+import { EnterpriseKycSimulator } from './components/EnterpriseKycSimulator';
 import { WebAuthnManager, MasterKeySession } from './core/crypto/webauthn';
 import { vaultDB } from './core/storage/db';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit'>('scan');
+  const [activeTab, setActiveTab] = useState<'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit' | 'enterprise'>('scan');
   const [session, setSession] = useState<MasterKeySession>(WebAuthnManager.getSession());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [vaultFileCount, setVaultFileCount] = useState<number>(0);
@@ -61,6 +62,8 @@ export function App() {
             onFileEncrypted={refreshVaultCount}
           />
         )}
+
+        {activeTab === 'enterprise' && <EnterpriseKycSimulator />}
 
         {activeTab === 'vault' && (
           <VaultView

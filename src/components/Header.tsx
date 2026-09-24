@@ -11,13 +11,14 @@ import {
   QrCode, 
   Fingerprint,
   WifiOff,
-  Sparkles
+  Sparkles,
+  Building2
 } from 'lucide-react';
 import { MasterKeySession } from '../core/crypto/webauthn';
 
 interface HeaderProps {
-  activeTab: 'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit';
-  setActiveTab: (tab: 'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit') => void;
+  activeTab: 'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit' | 'enterprise';
+  setActiveTab: (tab: 'scan' | 'vault' | 'policy' | 'assistant' | 'p2p' | 'audit' | 'enterprise') => void;
   session: MasterKeySession;
   onOpenAuthModal: () => void;
   onLockVault: () => void;
@@ -71,6 +72,21 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Cpu className="w-3.5 h-3.5" />
             Scan & Protect
+          </button>
+
+          <button
+            onClick={() => setActiveTab('enterprise')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              activeTab === 'enterprise'
+                ? 'bg-white text-indigo-700 font-semibold shadow-sm border border-slate-200/60'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+            }`}
+          >
+            <Building2 className="w-3.5 h-3.5 text-sky-600" />
+            <span>Bank KYC</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[9px] font-mono font-bold bg-amber-100 text-amber-800 border border-amber-300">
+              B2B
+            </span>
           </button>
 
           <button
@@ -181,6 +197,12 @@ export const Header: React.FC<HeaderProps> = ({
           className={`text-xs px-2.5 py-1 rounded font-medium ${activeTab === 'scan' ? 'bg-indigo-600 text-white font-bold' : 'text-slate-600'}`}
         >
           Scan
+        </button>
+        <button
+          onClick={() => setActiveTab('enterprise')}
+          className={`text-xs px-2.5 py-1 rounded font-medium ${activeTab === 'enterprise' ? 'bg-indigo-600 text-white font-bold' : 'text-slate-600'}`}
+        >
+          Bank KYC
         </button>
         <button
           onClick={() => setActiveTab('vault')}
