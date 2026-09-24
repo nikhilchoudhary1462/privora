@@ -459,41 +459,50 @@
         }
       }
 
-      // Check whether this document is a PAN card (either by filename or photo on the right)
-      const isPanCard = isPan || (!isAadhaar && skinRight > skinLeft + 25 && skinRight > 30);
+      // Check whether this document is a PAN card (either by filename or PAN aspect ratio/photo layout)
+      const isPanCard = isPan || (!isAadhaar && (w / h > 1.35 || skinRight > 25));
 
       if (isPanCard) {
         // --- PAN CARD PROTECTION: PHOTO + PAN NUMBER ONLY ---
-        // 1. Photo: if right skin cluster found, use right; if left skin cluster found, use left; else standard right slot
-        if (skinRight > 20 && maxXRight > minXRight && maxYRight > minYRight) {
-          const fX = Math.max(Math.round(w * 0.55), Math.round((minXRight - 6) / scale));
-          const fY = Math.max(cardY, Math.min(Math.round((minYRight - 15) / scale), Math.round(cardY + cardH * 0.25)));
-          const fW = Math.min(w - fX, Math.max(Math.round(w * 0.20), Math.round((maxXRight - minXRight + 12) / scale)));
-          const fH = Math.min(Math.round(cardH * 0.70), Math.max(Math.round(cardH * 0.38), Math.round((maxYRight + 15) / scale) - fY));
-          boxes.push({ x: fX, y: fY, width: fW, height: fH, label: 'Face Photo' });
-        } else if (skinLeft > 20 && maxXLeft > minXLeft && maxYLeft > minYLeft) {
-          const fX = 0;
-          const fY = Math.max(cardY, Math.min(Math.round((minYLeft - 15) / scale), Math.round(cardY + cardH * 0.25)));
-          const fW = Math.min(Math.round(w * 0.25), Math.max(Math.round(w * 0.20), Math.round((maxXLeft + 10) / scale)));
-          const fH = Math.min(Math.round(cardH * 0.70), Math.max(Math.round(cardH * 0.38), Math.round((maxYLeft + 15) / scale) - fY));
-          boxes.push({ x: fX, y: fY, width: fW, height: fH, label: 'Face Photo' });
-        } else {
-          // Standard PAN card portrait slot (right side)
-          boxes.push({
-            x: Math.round(w * 0.68),
-            y: Math.round(cardY + cardH * 0.32),
-            width: Math.round(w * 0.26),
-            height: Math.round(cardH * 0.48),
-            label: 'Face Photo'
-          });
+        // 1. Photo: located strictly below top header ("INCOME TAX DEPARTMENT")
+        // Starts at y: ~20% of card height, height: ~42% of card height, width: ~23% of card width
+        let pX = 0;
+        let pY = Math.round(cardY + cardH * 0.20);
+        let pW = Math.round(w * 0.23);
+        let pH = Math.round(cardH * 0.42);
+
+        if (skinRight > skinLeft + 25 && skinRight > 30) {
+          // Rare UTIITSL PAN cards where photo is on the right
+          pX = Math.round(w * 0.68);
+          pW = Math.round(w * 0.25);
+          pY = Math.round(cardY + cardH * 0.25);
+          pH = Math.round(cardH * 0.45);
+        } else if (skinLeft > 15 && maxYLeft > minYLeft && minYLeft > cardH * 0.12) {
+          pY = Math.max(Math.round(cardY + cardH * 0.18), Math.round((minYLeft - 10) / scale));
+          pH = Math.min(Math.round(cardH * 0.46), Math.max(Math.round(cardH * 0.38), Math.round((maxYLeft + 10) / scale) - pY));
         }
 
-        // 2. PAN Number: strictly the 10-character PAN number row in the center-left
         boxes.push({
-          x: Math.round(w * 0.16),
-          y: Math.round(cardY + cardH * 0.48),
-          width: Math.round(w * 0.52),
-          height: Math.round(cardH * 0.16),
+          x: pX,
+          y: pY,
+          width: pW,
+          height: pH,
+          label: 'Face Photo'
+        });
+
+        // 2. PAN Number: strictly the 10-character PAN number row in the center-left
+        // Directly below "Permanent Account Number Card", above "Name"
+        // Exactly at y: 38% to 54% of card height, x: 21% to 65% of card width
+        const panX = Math.round(w * 0.21);
+        const panY = Math.round(cardY + cardH * 0.38);
+        const panW = Math.round(w * 0.44);
+        const panH = Math.round(cardH * 0.16);
+
+        boxes.push({
+          x: panX,
+          y: panY,
+          width: panW,
+          height: panH,
           label: 'PAN Number'
         });
 
@@ -573,13 +582,18 @@
       window._privoraRecentManifests.length = 25;
     }
 
-    // 2. Persist to extension storage
+    // 2. Broadcast to background service worker (accessible across all tabs, redirects, and reloads)
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({ type: 'STORE_MANIFEST', manifest }).catch(() => {});
+    }
+
+    // 3. Persist to extension storage
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get(['aegis_active_manifests'], (res) => {
         const active = res.aegis_active_manifests || [];
         active.unshift(manifest);
         chrome.storage.local.set({
-          aegis_active_manifests: active.slice(0, 15),
+          aegis_active_manifests: active.slice(0, 20),
         }, () => {
           if (chrome.runtime.lastError) {
             console.warn('[Privora Shield] Storage set warning:', chrome.runtime.lastError.message);
@@ -2312,9 +2326,29 @@
   async function retraceAndRestoreImage(imageBlob, fileName) {
     const memoryManifests = window._privoraRecentManifests || [];
 
+    // Query background service worker for cross-tab shared manifests
+    let bgManifests = [];
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      try {
+        const resp = await new Promise((res) => {
+          chrome.runtime.sendMessage({ type: 'GET_MANIFESTS' }, res);
+        });
+        if (resp && resp.manifests) bgManifests = resp.manifests;
+      } catch (e) {}
+    }
+
     return new Promise((resolve) => {
       const executeRestore = async (storageManifests) => {
-        const manifests = [...memoryManifests, ...(storageManifests || [])];
+        const allManifests = [...memoryManifests, ...bgManifests, ...(storageManifests || [])];
+        const manifests = [];
+        const seenIds = new Set();
+        for (const m of allManifests) {
+          if (m && m.id && !seenIds.has(m.id)) {
+            seenIds.add(m.id);
+            manifests.push(m);
+          }
+        }
+
         if (manifests.length === 0) {
           resolve(null);
           return;
@@ -2341,11 +2375,15 @@
 
         // Match Priority 3: Same site / hostname match
         if (!matched) {
-          matched = manifests.find(m => m.hostname && m.hostname === window.location.hostname);
+          const currentHost = (window.location.hostname || '').replace(/^www\./, '');
+          matched = manifests.find(m => {
+            const mHost = (m.hostname || '').replace(/^www\./, '');
+            return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
+          });
         }
 
         // Match Priority 4: Most recent session
-        if (!matched && manifests.length > 0 && Date.now() - manifests[0].timestamp < 30 * 60 * 1000) {
+        if (!matched && manifests.length > 0 && Date.now() - manifests[0].timestamp < 2 * 60 * 60 * 1000) {
           matched = manifests[0];
         }
 
@@ -2425,14 +2463,47 @@
 
     const href = target.getAttribute('href') || target.href || '';
     const downloadAttr = target.getAttribute('download');
-    const isImageDownload = downloadAttr !== null || href.match(/\.(png|jpe?g|webp|svg)$/i) || href.startsWith('blob:') || href.startsWith('data:image/');
+    const text = (target.innerText || target.textContent || '').toLowerCase();
+    const className = String(target.className || '').toLowerCase();
+    const id = String(target.id || '').toLowerCase();
 
-    if (!isImageDownload || !href) return false;
+    const isImageDownload = downloadAttr !== null ||
+      href.match(/\.(png|jpe?g|webp|svg|bmp|gif|pdf)$/i) ||
+      href.startsWith('blob:') ||
+      href.startsWith('data:image/') ||
+      href.toLowerCase().includes('download') ||
+      href.toLowerCase().includes('/output/') ||
+      href.toLowerCase().includes('/get/') ||
+      text.includes('download') ||
+      className.includes('download') ||
+      id.includes('download');
+
+    if (!isImageDownload) return false;
 
     return new Promise((resolve) => {
       const memoryManifests = window._privoraRecentManifests || [];
       const checkAndIntercept = async (storageManifests) => {
-        const manifests = [...memoryManifests, ...(storageManifests || [])];
+        // Query background service worker as well
+        let bgManifests = [];
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          try {
+            const resp = await new Promise((res) => {
+              chrome.runtime.sendMessage({ type: 'GET_MANIFESTS' }, res);
+            });
+            if (resp && resp.manifests) bgManifests = resp.manifests;
+          } catch (e) {}
+        }
+
+        const allManifests = [...memoryManifests, ...bgManifests, ...(storageManifests || [])];
+        const manifests = [];
+        const seenIds = new Set();
+        for (const m of allManifests) {
+          if (m && m.id && !seenIds.has(m.id)) {
+            seenIds.add(m.id);
+            manifests.push(m);
+          }
+        }
+
         if (manifests.length === 0) {
           resolve(false);
           return;
@@ -2457,10 +2528,14 @@
         }
 
         if (!matched) {
-          matched = manifests.find(m => m.hostname && m.hostname === window.location.hostname);
+          const currentHost = (window.location.hostname || '').replace(/^www\./, '');
+          matched = manifests.find(m => {
+            const mHost = (m.hostname || '').replace(/^www\./, '');
+            return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
+          });
         }
 
-        if (!matched && manifests.length > 0 && Date.now() - manifests[0].timestamp < 30 * 60 * 1000) {
+        if (!matched && manifests.length > 0 && Date.now() - manifests[0].timestamp < 2 * 60 * 60 * 1000) {
           matched = manifests[0];
         }
 
@@ -2486,7 +2561,7 @@
           if (href.startsWith('data:')) {
             const r = await fetch(href);
             blob = await r.blob();
-          } else {
+          } else if (href) {
             try {
               blob = await fetch(href).then(r => r.blob());
             } catch (fetchErr) {
@@ -2503,41 +2578,56 @@
             }
           }
 
+          if (!blob) {
+            console.warn('[Privora Shield] Could not fetch download blob directly, allowing natural download.');
+            target.dataset.aegisRestored = 'true';
+            target.click();
+            resolve(false);
+            return;
+          }
+
           const result = await retraceAndRestoreImage(blob, candidateName);
-          const restoredBlob = result?.blob || blob;
-          const finalUrl = URL.createObjectURL(restoredBlob);
+          if (result && result.blob) {
+            const restoredBlob = result.blob;
+            const finalUrl = URL.createObjectURL(restoredBlob);
 
-          const a = document.createElement('a');
-          a.href = finalUrl;
-          a.download = downloadAttr || (result?.manifest?.fileName ? result.manifest.fileName : candidateName);
-          a.dataset.aegisRestored = 'true';
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
+            const a = document.createElement('a');
+            a.href = finalUrl;
+            a.download = downloadAttr || (result?.manifest?.fileName ? result.manifest.fileName : candidateName);
+            a.dataset.aegisRestored = 'true';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
 
-          const inKb = (result?.inputSize ? result.inputSize / 1024 : blob.size / 1024).toFixed(1);
-          const outKb = (restoredBlob.size / 1024).toFixed(1);
+            const inKb = (result?.inputSize ? result.inputSize / 1024 : blob.size / 1024).toFixed(1);
+            const outKb = (restoredBlob.size / 1024).toFixed(1);
 
-          showPrivoraHud({
-            type: 'decrypted',
-            title: 'Privora Shield · Decrypted & Restored',
-            subtitle: `Clean original photo saved! Compressed size: ${inKb} KB → Restored: ${outKb} KB (Zero privacy loss) ✓`,
-            durationMs: 4500
-          });
+            showPrivoraHud({
+              type: 'decrypted',
+              title: 'Privora Shield · Decrypted & Restored',
+              subtitle: `Clean original photo saved! Compressed size: ${inKb} KB → Restored: ${outKb} KB (Zero privacy loss) ✓`,
+              durationMs: 4500
+            });
 
-          logExtensionAuditEvent({
-            eventType: 'AUTO_DECRYPT_RESTORE',
-            severity: 'INFO',
-            actionTaken: `Auto-decrypted and restored ${candidateName} downloaded from ${window.location.hostname}`,
-            details: {
-              fileName: candidateName,
-              restoredSize: restoredBlob.size,
-              inputSize: blob.size,
-            },
-            riskScore: 0,
-          });
+            logExtensionAuditEvent({
+              eventType: 'AUTO_DECRYPT_RESTORE',
+              severity: 'INFO',
+              actionTaken: `Auto-decrypted and restored ${candidateName} downloaded from ${window.location.hostname}`,
+              details: {
+                fileName: candidateName,
+                restoredSize: restoredBlob.size,
+                inputSize: blob.size,
+              },
+              riskScore: 0,
+            });
 
-          resolve(true);
+            resolve(true);
+          } else {
+            console.warn('[Privora Shield] Auto-decryption found no matching slices, downloading file unmodified.');
+            target.dataset.aegisRestored = 'true';
+            target.click();
+            resolve(false);
+          }
         } catch (err) {
           console.warn('[Privora Shield] Auto-decryption failed, downloading unmodified:', err);
           target.dataset.aegisRestored = 'true';
@@ -2556,14 +2646,14 @@
     });
   }
 
-  // Intercept Download Link Clicks
+  // Intercept Download Link & Button Clicks
   document.addEventListener('click', async (e) => {
     let target = e.target;
-    while (target && target.tagName !== 'A' && target !== document.body) {
+    while (target && target.tagName !== 'A' && target.tagName !== 'BUTTON' && target !== document.body) {
       target = target.parentElement;
     }
 
-    if (target && target.tagName === 'A') {
+    if (target && (target.tagName === 'A' || target.tagName === 'BUTTON')) {
       const handled = await handleDownloadInterception(target, e);
       if (handled) return;
     }
@@ -2579,7 +2669,20 @@
 
       const href = this.getAttribute('href') || this.href || '';
       const downloadAttr = this.getAttribute('download');
-      const isImageDownload = downloadAttr !== null || href.match(/\.(png|jpe?g|webp|svg)$/i) || href.startsWith('blob:') || href.startsWith('data:image/');
+      const text = (this.innerText || this.textContent || '').toLowerCase();
+      const className = String(this.className || '').toLowerCase();
+      const id = String(this.id || '').toLowerCase();
+
+      const isImageDownload = downloadAttr !== null ||
+        href.match(/\.(png|jpe?g|webp|svg|bmp|gif|pdf)$/i) ||
+        href.startsWith('blob:') ||
+        href.startsWith('data:image/') ||
+        href.toLowerCase().includes('download') ||
+        href.toLowerCase().includes('/output/') ||
+        href.toLowerCase().includes('/get/') ||
+        text.includes('download') ||
+        className.includes('download') ||
+        id.includes('download');
 
       if (isImageDownload) {
         handleDownloadInterception(this, null).then((intercepted) => {

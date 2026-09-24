@@ -4,8 +4,23 @@
  * - Monitors file downloads to detect when an encrypted document is saved and alerts for auto-restoration.
  */
 
+let globalRecentManifests = [];
+
 // Store audit events in chrome.storage.local
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'STORE_MANIFEST' && message.manifest) {
+    globalRecentManifests.unshift(message.manifest);
+    if (globalRecentManifests.length > 30) globalRecentManifests.length = 30;
+    chrome.storage.local.get(['aegis_active_manifests'], (res) => {
+      const active = res.aegis_active_manifests || [];
+      active.unshift(message.manifest);
+      chrome.storage.local.set({ aegis_active_manifests: active.slice(0, 20) }, () => {
+        sendResponse({ success: true });
+      });
+    });
+    return true;
+  }
+
   if (message.type === 'LOG_AUDIT_EVENT') {
     const event = message.event;
     event.id = 'ext_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
@@ -30,8 +45,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_MANIFESTS') {
-    chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
-      sendResponse({ manifests: res.aegis_active_manifests || res.aegis_encrypted_manifests || [] });
+    chrome.storage.local.get(['aegis_active_manifests'], (res) => {
+      const stored = res.aegis_active_manifests || [];
+      const combined = [...globalRecentManifests];
+      for (const m of stored) {
+        if (!combined.some(c => c.id === m.id)) combined.push(m);
+      }
+      sendResponse({ manifests: combined });
     });
     return true;
   }
