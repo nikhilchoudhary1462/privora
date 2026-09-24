@@ -2647,16 +2647,51 @@
   }
 
   // Intercept Download Link & Button Clicks
-  document.addEventListener('click', async (e) => {
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.dataset && e.target.dataset.aegisRestored === 'true') {
+      return;
+    }
+
     let target = e.target;
     while (target && target.tagName !== 'A' && target.tagName !== 'BUTTON' && target !== document.body) {
       target = target.parentElement;
     }
 
-    if (target && (target.tagName === 'A' || target.tagName === 'BUTTON')) {
-      const handled = await handleDownloadInterception(target, e);
-      if (handled) return;
-    }
+    if (!target || (target.tagName !== 'A' && target.tagName !== 'BUTTON')) return;
+    if (target.dataset.aegisRestored === 'true') return;
+
+    const href = target.getAttribute('href') || target.href || '';
+    const downloadAttr = target.getAttribute('download');
+    const text = (target.innerText || target.textContent || '').toLowerCase();
+    const className = String(target.className || '').toLowerCase();
+    const id = String(target.id || '').toLowerCase();
+
+    const isDownloadAction = downloadAttr !== null ||
+      href.match(/\.(png|jpe?g|webp|svg|bmp|gif|pdf)$/i) ||
+      href.startsWith('blob:') ||
+      href.startsWith('data:image/') ||
+      href.toLowerCase().includes('download') ||
+      href.toLowerCase().includes('/output/') ||
+      href.toLowerCase().includes('/get/') ||
+      text.includes('download') ||
+      className.includes('download') ||
+      id.includes('download');
+
+    if (!isDownloadAction) return;
+
+    // SYNCHRONOUSLY CANCEL THE BROWSER DEFAULT DOWNLOAD ACTION RIGHT HERE!
+    // This stops the browser from downloading the server's raw encrypted image!
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    handleDownloadInterception(target, null).then((handled) => {
+      if (!handled) {
+        // If Privora could not restore it, mark as restored and trigger natural download
+        target.dataset.aegisRestored = 'true';
+        target.click();
+      }
+    });
   }, true);
 
   // Hook HTMLAnchorElement.prototype.click for programmatic downloads (e.g. TinyPNG, Squoosh)
