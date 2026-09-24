@@ -386,34 +386,6 @@
     const fn = (fileName || '').toLowerCase();
     const boxes = [];
 
-    // Check 1: Known Government ID / Identity Card filename patterns
-    const isDocPattern = fn.includes('aadhaar') || fn.includes('id') || fn.includes('pan') || fn.includes('card') || fn.includes('passport') || fn.includes('license');
-    if (isDocPattern) {
-      boxes.push({
-        x: Math.round(w * 0.08),
-        y: Math.round(h * 0.25),
-        width: Math.round(w * 0.22),
-        height: Math.round(h * 0.42),
-        label: 'Face Photo'
-      });
-      boxes.push({
-        x: Math.round(w * 0.32),
-        y: Math.round(h * 0.35),
-        width: Math.round(w * 0.38),
-        height: Math.round(h * 0.16),
-        label: 'Name / Demographic'
-      });
-      boxes.push({
-        x: Math.round(w * 0.30),
-        y: Math.round(h * 0.78),
-        width: Math.round(w * 0.45),
-        height: Math.round(h * 0.14),
-        label: 'ID / Sensitive Number'
-      });
-      return boxes;
-    }
-
-    // Check 2: Biometric Skin-Tone & Face Detection Heuristic on downscaled grid
     try {
       const scale = Math.min(1, 240 / Math.max(w, h));
       const sw = Math.max(20, Math.round(w * scale));
@@ -426,14 +398,44 @@
       const imgData = thumbCtx.getImageData(0, 0, sw, sh);
       const d = imgData.data;
 
-      let minX = sw, minY = sh, maxX = 0, maxY = 0, count = 0;
+      // 1. Detect document vertical boundary in downscaled coordinates (handles CamScanner / scanned A4 white margins)
+      const rowActivity = new Array(sh).fill(0);
       for (let y = 0; y < sh; y++) {
+        let nonWhite = 0;
         for (let x = 0; x < sw; x++) {
           const i = (y * sw + x) * 4;
+          if (d[i] < 235 || d[i + 1] < 235 || d[i + 2] < 235) nonWhite++;
+        }
+        rowActivity[y] = nonWhite / sw;
+      }
+
+      let cardTop = 0;
+      let cardBottom = sh - 1;
+      for (let y = 0; y < sh; y++) {
+        if (rowActivity[y] > 0.08) { cardTop = y; break; }
+      }
+      for (let y = sh - 1; y > cardTop; y--) {
+        if (rowActivity[y] > 0.08) {
+          // Skip isolated scanner watermark rows at very bottom (e.g. 'Scanned with CamScanner')
+          if (y > sh * 0.85 && rowActivity[y] < 0.25 && rowActivity[Math.max(0, y - 4)] < 0.04) continue;
+          cardBottom = y;
+          break;
+        }
+      }
+
+      const cardY = Math.round(cardTop / scale);
+      const cardH = Math.max(80, Math.round((cardBottom - cardTop) / scale));
+
+      // 2. Locate Face Photo (scan left 32% of card where portrait photos are placed on Aadhaar / ID cards)
+      let minX = sw, maxX = 0, minY = sh, maxY = 0, skinCount = 0;
+      const leftBoundX = Math.round(sw * 0.32);
+      for (let y = cardTop; y <= cardBottom; y++) {
+        for (let x = 0; x <= leftBoundX; x++) {
+          const i = (y * sw + x) * 4;
           const r = d[i], g = d[i + 1], b = d[i + 2];
-          // Standard skin-tone distribution in RGB space
+          // Standard human skin-tone range in RGB
           if (r > 95 && g > 40 && b > 20 && (Math.max(r, g, b) - Math.min(r, g, b) > 15) && Math.abs(r - g) > 15 && r > g && r > b) {
-            count++;
+            skinCount++;
             if (x < minX) minX = x;
             if (x > maxX) maxX = x;
             if (y < minY) minY = y;
@@ -442,39 +444,66 @@
         }
       }
 
-      const totalPixels = sw * sh;
-      // If skin tone cluster represents between 3% and 75% of the photo:
-      if (count > totalPixels * 0.03 && count < totalPixels * 0.75 && maxX > minX && maxY > minY) {
-        const padX = Math.round((maxX - minX) * 0.1);
-        const padY = Math.round((maxY - minY) * 0.1);
-        const fX = Math.max(0, Math.round((minX - padX) / scale));
-        const fY = Math.max(0, Math.round((minY - padY) / scale));
-        const fW = Math.min(w - fX, Math.round((maxX - minX + padX * 2) / scale));
-        const fH = Math.min(h - fY, Math.round((maxY - minY + padY * 2) / scale));
-        if (fW > 30 && fH > 30) {
-          boxes.push({
-            x: fX,
-            y: fY,
-            width: fW,
-            height: fH,
-            label: 'Face / Identity Region'
-          });
-          return boxes;
-        }
+      // Add Photo Box (strictly covering portrait photo on left)
+      if (skinCount > 20 && maxX > minX && maxY > minY) {
+        // Use card proportions bounded by skin cluster for hair-to-neck coverage
+        const fX = 0;
+        const fY = Math.max(cardY, Math.min(Math.round((minY - 15) / scale), Math.round(cardY + cardH * 0.18)));
+        const fW = Math.min(Math.round(w * 0.24), Math.max(Math.round(w * 0.20), Math.round((maxX + 10) / scale)));
+        const fH = Math.min(Math.round(cardH * 0.74), Math.max(Math.round(cardH * 0.40), Math.round((maxY + 15) / scale) - fY));
+        boxes.push({
+          x: fX,
+          y: fY,
+          width: fW,
+          height: fH,
+          label: 'Face Photo'
+        });
+      } else {
+        // Standard left portrait frame for identity cards
+        boxes.push({
+          x: 0,
+          y: Math.round(cardY + cardH * 0.18),
+          width: Math.round(w * 0.22),
+          height: Math.round(cardH * 0.55),
+          label: 'Face Photo'
+        });
       }
-    } catch (err) {
-      console.warn('[Privora] Skin-tone heuristic error:', err);
-    }
 
-    // Check 3: Default Focal Protection Box (central 60% of image)
-    boxes.push({
-      x: Math.round(w * 0.20),
-      y: Math.round(w === h ? h * 0.20 : h * 0.15),
-      width: Math.round(w * 0.60),
-      height: Math.round(h * 0.60),
-      label: 'Protected Visual Region'
-    });
-    return boxes;
+      // 3. Add Aadhaar Number Box (strictly covering the 12-digit Aadhaar number row near the bottom of the card)
+      const aadhY = Math.round(cardY + cardH * 0.74);
+      const aadhH = Math.round(cardH * 0.14);
+      const aadhW = Math.round(w * 0.64);
+      const aadhX = Math.round(w * 0.18);
+
+      boxes.push({
+        x: aadhX,
+        y: aadhY,
+        width: aadhW,
+        height: aadhH,
+        label: 'Aadhaar Number'
+      });
+
+      return boxes;
+    } catch (err) {
+      console.warn('[Privora] Auto-shield region detection error:', err);
+      // Failsafe strictly for Photo + Aadhaar Number
+      return [
+        {
+          x: 0,
+          y: Math.round(h * 0.20),
+          width: Math.round(w * 0.22),
+          height: Math.round(h * 0.55),
+          label: 'Face Photo'
+        },
+        {
+          x: Math.round(w * 0.18),
+          y: Math.round(h * 0.74),
+          width: Math.round(w * 0.64),
+          height: Math.round(h * 0.14),
+          label: 'Aadhaar Number'
+        }
+      ];
+    }
   }
 
   function saveManifest(manifest) {
