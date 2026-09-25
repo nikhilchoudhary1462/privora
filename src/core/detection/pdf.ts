@@ -76,74 +76,96 @@ export class PdfProcessor {
 
       const pageItems: DetectedItem[] = [];
 
+      // Extract and convert all text items to viewport coordinates
+      interface TextChunk {
+        str: string;
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+      }
+
+      const textChunks: TextChunk[] = [];
+      for (const item of textContent.items as any[]) {
+        if (!('str' in item) || !item.str) continue;
+        const [vx, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+        const tw = (item.width || 0) * 1.5;
+        const th = Math.max(14, (item.height || 10) * 1.5);
+        // vy is baseline in viewport coordinates; text top-left is (vx, vy - th)
+        textChunks.push({
+          str: item.str,
+          x: vx,
+          y: vy - th,
+          w: tw,
+          h: th,
+        });
+      }
+
       // Run Regex analysis over this page's text
       const regexFindings = RegexDetector.scanText(pageText);
 
-      const rawItems = (textContent.items as any[])
-        .filter((i: any) => i && typeof i.str === 'string' && i.str.length > 0);
-
-      // Map regex findings back to exact PDF viewport coordinates using union bounding boxes
+      // Map regex findings back to exact PDF viewport coordinates
       regexFindings.forEach((finding, fIdx) => {
         let matchedBox: BoundingBox | null = null;
 
         if (finding.value) {
-          const findingVal = finding.value.trim();
-          const cleanFinding = findingVal.replace(/[-\s]/g, '').toLowerCase();
+          const cleanVal = finding.value.replace(/[-\s]/g, '').toUpperCase();
 
-          // Find ALL matching items that contain or contribute to this finding
-          const matchedChunks: any[] = [];
-
-          for (const item of rawItems) {
-            const itemStr = item.str;
-            const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
-            if (!cleanItem) continue;
-
-            const isExactSubstring = itemStr.includes(findingVal) || findingVal.includes(itemStr);
-            const isCleanSubstring = (cleanItem.length >= 3 && cleanFinding.includes(cleanItem)) ||
-                                     (cleanFinding.length >= 3 && cleanItem.includes(cleanFinding));
-
-            if (isExactSubstring || isCleanSubstring) {
-              matchedChunks.push(item);
+          // 1. Direct single-item match (highest precision)
+          for (const chunk of textChunks) {
+            const cleanChunk = chunk.str.replace(/[-\s]/g, '').toUpperCase();
+            if (chunk.str.includes(finding.value) || (cleanVal.length >= 4 && cleanChunk.includes(cleanVal))) {
+              matchedBox = {
+                x: Math.max(0, Math.round(chunk.x - 4)),
+                y: Math.max(0, Math.round(chunk.y - 4)),
+                width: Math.round(Math.max(50, chunk.w) + 8),
+                height: Math.round(Math.max(18, chunk.h) + 8),
+                label: finding.label,
+                isNormalized: false,
+                boxConfidence: 'EXACT',
+                boxVerified: true,
+              };
+              break;
             }
           }
 
-          if (matchedChunks.length > 0) {
-            let minX = Infinity;
-            let minY = Infinity;
-            let maxX = -Infinity;
-            let maxY = -Infinity;
+          // 2. Line-stream match if value was split across multiple chunks on the same horizontal baseline
+          if (!matchedBox) {
+            const lines: TextChunk[][] = [];
+            const sorted = [...textChunks].sort((a, b) => a.y - b.y || a.x - b.x);
+            for (const chunk of sorted) {
+              const line = lines.find(l => Math.abs(l[0].y - chunk.y) <= 4);
+              if (line) line.push(chunk);
+              else lines.push([chunk]);
+            }
 
-            matchedChunks.forEach((item) => {
-              const tx = item.transform[4] * 1.5;
-              const ty = viewport.height - (item.transform[5] * 1.5);
-              const tw = Math.max(16, (item.width || 40) * 1.5);
-              const th = Math.max(14, (item.height || Math.abs(item.transform[0]) || 14) * 1.5);
+            for (const line of lines) {
+              const lineRaw = line.map(c => c.str).join('');
+              const lineClean = lineRaw.replace(/[-\s]/g, '').toUpperCase();
+              if (lineClean.includes(cleanVal)) {
+                // Find bounding box encompassing all items in this line that contain part of the value
+                const minX = Math.min(...line.map(c => c.x));
+                const maxX = Math.max(...line.map(c => c.x + c.w));
+                const minY = Math.min(...line.map(c => c.y));
+                const maxY = Math.max(...line.map(c => c.y + c.h));
 
-              const bx = Math.max(0, Math.round(tx - 4));
-              const by = Math.max(0, Math.round(ty - th - 3));
-              const bw = Math.round(tw + 8);
-              const bh = Math.round(th + 6);
-
-              minX = Math.min(minX, bx);
-              minY = Math.min(minY, by);
-              maxX = Math.max(maxX, bx + bw);
-              maxY = Math.max(maxY, by + bh);
-            });
-
-            if (minX < Infinity && maxX > minX && maxY > minY) {
-              matchedBox = {
-                x: minX,
-                y: minY,
-                width: Math.min(canvas.width - minX, maxX - minX),
-                height: Math.min(canvas.height - minY, maxY - minY),
-                label: finding.label,
-                isNormalized: false,
-              };
+                matchedBox = {
+                  x: Math.max(0, Math.round(minX - 4)),
+                  y: Math.max(0, Math.round(minY - 4)),
+                  width: Math.round(Math.max(50, maxX - minX) + 8),
+                  height: Math.round(Math.max(18, maxY - minY) + 8),
+                  label: finding.label,
+                  isNormalized: false,
+                  boxConfidence: 'EXACT',
+                  boxVerified: true,
+                };
+                break;
+              }
             }
           }
         }
 
-        // If no direct coordinate match, calculate reasonable position on canvas
+        // If no direct coordinate match, calculate estimated position on canvas
         if (!matchedBox) {
           matchedBox = {
             x: Math.round(canvas.width * 0.1),
@@ -152,6 +174,8 @@ export class PdfProcessor {
             height: 32,
             label: finding.label,
             isNormalized: false,
+            boxConfidence: 'ESTIMATED',
+            boxVerified: false,
           };
         }
 

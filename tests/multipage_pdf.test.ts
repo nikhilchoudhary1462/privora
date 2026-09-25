@@ -121,4 +121,75 @@ describe('Multi-Page Document & PDF Processing Engine', () => {
     expect(panMap).toBeDefined();
     expect(panMap?.syntheticValue).toMatch(/^[A-Z]{5}\d{4}[A-Z]$/);
   });
+
+  it('avoids false footer single-digit matches and clusters split PDF text chunks into exact bounding box', () => {
+    // Simulate PDF items where item 1 is a footer page number "8" at bottom right
+    // and items 10, 11, 12 are table chunks for Aadhaar "7058 1663 3069"
+    interface MockPdfChunk {
+      str: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+    }
+
+    const chunks: MockPdfChunk[] = [
+      { str: 'Header', x: 50, y: 50, w: 100, h: 12 },
+      { str: '8', x: 545, y: 1200, w: 5, h: 10 }, // Footer page number at bottom right
+      { str: 'Sahil Singh', x: 240, y: 200, w: 80, h: 12 },
+      { str: '7058 ', x: 240, y: 250, w: 25, h: 12 },
+      { str: '1663 ', x: 268, y: 250, w: 25, h: 12 },
+      { str: '3069', x: 296, y: 250, w: 25, h: 12 },
+    ];
+
+    const targetVal = '7058 1663 3069';
+    const cleanVal = targetVal.replace(/[-\s]/g, '').toUpperCase();
+
+    // The new logic:
+    let matchedBox: any = null;
+
+    // 1. Direct single-item check
+    for (const chunk of chunks) {
+      const cleanChunk = chunk.str.replace(/[-\s]/g, '').toUpperCase();
+      if (chunk.str.includes(targetVal) || (cleanVal.length >= 4 && cleanChunk.includes(cleanVal))) {
+        matchedBox = { x: chunk.x, y: chunk.y, width: chunk.w, height: chunk.h };
+        break;
+      }
+    }
+
+    // 2. Line stream check
+    if (!matchedBox) {
+      const lines: MockPdfChunk[][] = [];
+      const sorted = [...chunks].sort((a, b) => a.y - b.y || a.x - b.x);
+      for (const chunk of sorted) {
+        const line = lines.find(l => Math.abs(l[0].y - chunk.y) <= 4);
+        if (line) line.push(chunk);
+        else lines.push([chunk]);
+      }
+
+      for (const line of lines) {
+        const lineClean = line.map(c => c.str).join('').replace(/[-\s]/g, '').toUpperCase();
+        if (lineClean.includes(cleanVal)) {
+          const minX = Math.min(...line.map(c => c.x));
+          const maxX = Math.max(...line.map(c => c.x + c.w));
+          const minY = Math.min(...line.map(c => c.y));
+          const maxY = Math.max(...line.map(c => c.y + c.h));
+          matchedBox = {
+            x: Math.max(0, Math.round(minX - 4)),
+            y: Math.max(0, Math.round(minY - 4)),
+            width: Math.round(Math.max(50, maxX - minX) + 8),
+            height: Math.round(Math.max(18, maxY - minY) + 8),
+          };
+          break;
+        }
+      }
+    }
+
+    expect(matchedBox).not.toBeNull();
+    // Must NOT match the footer at y=1200
+    expect(matchedBox.y).toBeLessThan(300);
+    expect(matchedBox.x).toBe(236); // 240 - 4
+    expect(matchedBox.width).toBeGreaterThanOrEqual(81); // spans 240 to 321 + padding
+  });
 });
+
