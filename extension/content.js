@@ -1256,6 +1256,7 @@
           const totalPages = Math.max(1, pdfDoc.numPages);
           const maskedCanvases = [];
           const allPdfPages = [];
+          const pdfSlices = [];
 
           for (let pNum = 1; pNum <= totalPages; pNum++) {
             const page = await pdfDoc.getPage(pNum);
@@ -1297,6 +1298,36 @@
               const matchedBox = findBoundingBoxForFinding(finding, rawItems, pCanvas.width, pCanvas.height);
               if (matchedBox) {
                 pageBoxes.push(matchedBox);
+              }
+            });
+
+            // Extract unblurred slice before masking
+            pageBoxes.forEach(box => {
+              const cropCanvas = document.createElement('canvas');
+              cropCanvas.width = Math.max(1, Math.round(box.width));
+              cropCanvas.height = Math.max(1, Math.round(box.height));
+              const cCtx = cropCanvas.getContext('2d');
+              if (cCtx) {
+                cCtx.drawImage(
+                  pCanvas,
+                  Math.round(box.x),
+                  Math.round(box.y),
+                  Math.round(box.width),
+                  Math.round(box.height),
+                  0,
+                  0,
+                  cropCanvas.width,
+                  cropCanvas.height
+                );
+                pdfSlices.push({
+                  pageNum: pNum,
+                  normX: box.x / pCanvas.width,
+                  normY: box.y / pCanvas.height,
+                  normW: box.width / pCanvas.width,
+                  normH: box.height / pCanvas.height,
+                  cropDataUrl: cropCanvas.toDataURL('image/png'),
+                  label: box.label || 'Protected Piece',
+                });
               }
             });
 
@@ -1362,7 +1393,7 @@
             maskedFileSize: maskedPdfBlob.size,
             origHash,
             timestamp: Date.now(),
-            slices: [],
+            slices: pdfSlices,
             origin: window.location.origin,
             hostname: window.location.hostname,
           };
@@ -2659,7 +2690,39 @@
     btnConfirmMask.onclick = async () => {
       // 1. Extract raw unblurred slices for auto-restoration
       const unblurredSlices = [];
-      if (baseImage && baseImage.complete && baseImage.naturalWidth > 0) {
+      if (isPdf && pdfPages && pdfPages.length > 0) {
+        pdfPages[currentPdfPageIdx].boxes = [...currentBoxes];
+        for (const p of pdfPages) {
+          (p.boxes || []).forEach((box) => {
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = Math.max(1, Math.round(box.width));
+            cropCanvas.height = Math.max(1, Math.round(box.height));
+            const cCtx = cropCanvas.getContext('2d');
+            if (cCtx) {
+              cCtx.drawImage(
+                p.canvas,
+                Math.round(box.x),
+                Math.round(box.y),
+                Math.round(box.width),
+                Math.round(box.height),
+                0,
+                0,
+                cropCanvas.width,
+                cropCanvas.height
+              );
+              unblurredSlices.push({
+                pageNum: p.pageNum,
+                normX: box.x / p.canvas.width,
+                normY: box.y / p.canvas.height,
+                normW: box.width / p.canvas.width,
+                normH: box.height / p.canvas.height,
+                cropDataUrl: cropCanvas.toDataURL('image/png'),
+                label: box.label || 'Protected Piece',
+              });
+            }
+          });
+        }
+      } else if (baseImage && baseImage.complete && baseImage.naturalWidth > 0) {
         currentBoxes.forEach((box) => {
           const cropCanvas = document.createElement('canvas');
           cropCanvas.width = Math.max(1, Math.round(box.width));
@@ -3112,6 +3175,74 @@
         if (!matched || !matched.slices || matched.slices.length === 0) {
           resolve(null);
           return;
+        }
+
+        const isPdfTarget = (fileName && fileName.toLowerCase().endsWith('.pdf')) ||
+          (imageBlob && imageBlob.type === 'application/pdf') ||
+          (matched.fileName && matched.fileName.toLowerCase().endsWith('.pdf'));
+
+        if (isPdfTarget) {
+          const pdfLib = typeof pdfjsLib !== 'undefined' ? pdfjsLib : (typeof window !== 'undefined' ? window.pdfjsLib : undefined);
+          const workerLib = typeof pdfjsWorker !== 'undefined' ? pdfjsWorker : (typeof window !== 'undefined' ? window.pdfjsWorker : undefined);
+          if (pdfLib) {
+            try {
+              if (workerLib && workerLib.WorkerMessageHandler) {
+                pdfLib.PDFWorker._mainThreadWorkerMessageHandler = workerLib.WorkerMessageHandler;
+              }
+              const arrayBuffer = await imageBlob.arrayBuffer();
+              const loadingTask = pdfLib.getDocument({
+                data: new Uint8Array(arrayBuffer),
+                useSystemFonts: true,
+              });
+              const pdfDoc = await loadingTask.promise;
+              const totalPages = Math.max(1, pdfDoc.numPages);
+              const restoredCanvases = [];
+
+              for (let pNum = 1; pNum <= totalPages; pNum++) {
+                const page = await pdfDoc.getPage(pNum);
+                const viewport = page.getViewport({ scale: 1.5 });
+                const rCanvas = document.createElement('canvas');
+                rCanvas.width = Math.round(viewport.width);
+                rCanvas.height = Math.round(viewport.height);
+                const rCtx = rCanvas.getContext('2d', { willReadFrequently: true });
+                rCtx.fillStyle = '#FFFFFF';
+                rCtx.fillRect(0, 0, rCanvas.width, rCanvas.height);
+                await page.render({ canvasContext: rCtx, viewport }).promise;
+
+                // Overlay unblurred slices for this page
+                const pageSlices = matched.slices.filter(s => (s.pageNum === pNum) || (!s.pageNum && pNum === 1));
+                for (const slice of pageSlices) {
+                  const sliceImg = new Image();
+                  await new Promise(res => {
+                    sliceImg.onload = res;
+                    sliceImg.onerror = res;
+                    sliceImg.src = slice.cropDataUrl;
+                  });
+                  const sx = Math.round(slice.normX * rCanvas.width);
+                  const sy = Math.round(slice.normY * rCanvas.height);
+                  const sw = Math.round(slice.normW * rCanvas.width);
+                  const sh = Math.round(slice.normH * rCanvas.height);
+                  rCtx.drawImage(sliceImg, sx, sy, sw, sh);
+                }
+
+                restoredCanvases.push(rCanvas);
+              }
+
+              const restoredPdfBlob = createPdfBlobFromCanvases(restoredCanvases);
+              if (restoredPdfBlob) {
+                resolve({
+                  blob: restoredPdfBlob,
+                  inputSize: imageBlob.size,
+                  restoredSize: restoredPdfBlob.size,
+                  originalSize: matched.originalFileSize || null,
+                  manifest: matched,
+                });
+                return;
+              }
+            } catch (pdfErr) {
+              console.warn('[Privora Shield] Retracing PDF failed:', pdfErr);
+            }
+          }
         }
 
         const img = new Image();
