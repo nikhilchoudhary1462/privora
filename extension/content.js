@@ -22,9 +22,14 @@
 
     if (chrome.storage.onChanged) {
       chrome.storage.onChanged.addListener((changes, area) => {
-        if (area === 'local' && changes.privora_shield_enabled) {
-          isShieldEnabled = changes.privora_shield_enabled.newValue !== false;
-          console.log('[Privora Shield] Active status:', isShieldEnabled ? 'ON' : 'OFF');
+        if (area === 'local') {
+          if (changes.privora_shield_enabled) {
+            isShieldEnabled = changes.privora_shield_enabled.newValue !== false;
+            console.log('[Privora Shield] Active status:', isShieldEnabled ? 'ON' : 'OFF');
+          }
+          if (changes.aegis_active_manifests && changes.aegis_active_manifests.newValue) {
+            window._privoraRecentManifests = changes.aegis_active_manifests.newValue;
+          }
         }
       });
     }
@@ -2820,13 +2825,7 @@
             origin: window.location.origin,
             hostname: window.location.hostname,
           };
-          if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.get(['aegis_active_manifests'], (res) => {
-              const list = res.aegis_active_manifests || [];
-              list.unshift(manifest);
-              chrome.storage.local.set({ aegis_active_manifests: list.slice(0, 50) });
-            });
-          }
+          saveManifest(manifest);
         } catch (e) {}
 
         overlay.remove();
@@ -2863,13 +2862,7 @@
             origin: window.location.origin,
             hostname: window.location.hostname,
           };
-          if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.get(['aegis_active_manifests'], (res) => {
-              const list = res.aegis_active_manifests || [];
-              list.unshift(manifest);
-              chrome.storage.local.set({ aegis_active_manifests: list.slice(0, 50) });
-            });
-          }
+          saveManifest(manifest);
         } catch (e) {}
 
         overlay.remove();
@@ -2904,13 +2897,7 @@
             hostname: window.location.hostname,
           };
 
-          if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.get(['aegis_active_manifests'], (res) => {
-              const list = res.aegis_active_manifests || [];
-              list.unshift(manifest);
-              chrome.storage.local.set({ aegis_active_manifests: list.slice(0, 50) });
-            });
-          }
+          saveManifest(manifest);
         } catch (e) {}
 
         overlay.remove();
@@ -3102,37 +3089,69 @@
   // 7. Automatic Download Interceptor & In-Place Retracer
   // -------------------------------------------------------------
 
+  function cleanFileNameBase(name) {
+    if (!name) return '';
+    let base = name.split(/[/\\]/).pop().split('?')[0];
+    base = base.replace(/\.[^/.]+$/, '');
+    base = base.replace(/^(encrypted|masked|clean|sanitized|privora|redacted|decrypted)[_\-\s]*/i, '');
+    base = base.replace(/[_\-\s]*(encrypted|masked|clean|sanitized|privora|redacted|decrypted)$/i, '');
+    base = base.replace(/\s*\(\d+\)$/, '');
+    base = base.replace(/[_\-\s]+$/, '');
+    return base.toLowerCase().trim();
+  }
+
   function findMatchingManifest(manifests, candidateName) {
     if (!manifests || manifests.length === 0) return null;
 
-    const candidate = (candidateName || '').toLowerCase();
-    const candidateIsPan = candidate.includes('pan');
-    const candidateIsAadhaar = candidate.includes('aadhaar') || candidate.includes('adhar');
+    const cleanCand = cleanFileNameBase(candidateName);
+    const candidateLower = (candidateName || '').toLowerCase();
+    const candidateIsPan = candidateLower.includes('pan');
+    const candidateIsAadhaar = candidateLower.includes('aadhaar') || candidateLower.includes('adhar');
+    const isCandidatePdf = candidateLower.endsWith('.pdf') || candidateLower.includes('.pdf') || candidateName === 'downloaded_document';
     const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
 
-    // Priority 1: Exact or substring match of filename base
+    // Priority 1: Cleaned filename base exact or substring match
     let matched = manifests.find(m => {
-      const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
-      const fBase = candidate.replace(/\.[^/.]+$/, '').toLowerCase();
-      return mBase && fBase && (fBase.includes(mBase) || mBase.includes(fBase));
+      const cleanM = cleanFileNameBase(m.fileName || m.baseName);
+      if (!cleanM || !cleanCand) return false;
+      return cleanM === cleanCand || cleanCand.includes(cleanM) || cleanM.includes(cleanCand);
     });
 
-    // Priority 2: Document type keyword match on the SAME site
+    // Priority 2: Document type keyword match on the SAME site or session
     if (!matched && (candidateIsPan || candidateIsAadhaar)) {
       matched = manifests.find(m => {
         const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
-        const isHostMatch = mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
-        if (!isHostMatch) return false;
+        const isHostMatch = !currentHost || !mHost || mHost.includes(currentHost) || currentHost.includes(mHost);
         const mFn = (m.fileName || '').toLowerCase();
-        return (candidateIsPan && mFn.includes('pan')) || (candidateIsAadhaar && (mFn.includes('aadhaar') || mFn.includes('adhar')));
+        const mIsPan = mFn.includes('pan');
+        const mIsAadhaar = mFn.includes('aadhaar') || mFn.includes('adhar');
+        return isHostMatch && ((candidateIsPan && mIsPan) || (candidateIsAadhaar && mIsAadhaar));
       });
     }
 
-    // Priority 3: Hostname match (ONLY for the same website where the document was encrypted!)
+    // Priority 3: Hostname match (prefer matching file type: PDF with PDF manifest, image with image manifest)
     if (!matched && currentHost) {
       matched = manifests.find(m => {
         const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
-        return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
+        if (!mHost || (!mHost.includes(currentHost) && !currentHost.includes(mHost))) return false;
+        const mIsPdf = (m.fileName || '').toLowerCase().endsWith('.pdf') || (m.slices && m.slices.some(s => s.pageNum !== undefined));
+        return isCandidatePdf ? mIsPdf : !mIsPdf;
+      });
+
+      if (!matched) {
+        matched = manifests.find(m => {
+          const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+          return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
+        });
+      }
+    }
+
+    // Priority 4: Fallback for generic download names (e.g. blob UUID or "downloaded_document")
+    if (!matched && (candidateLower.startsWith('blob:') || cleanCand === 'downloaded_document' || cleanCand === 'download' || cleanCand === 'document' || !cleanCand)) {
+      matched = manifests.find(m => {
+        const isRecent = !m.timestamp || (Date.now() - m.timestamp < 1800000); // 30 minutes
+        const mIsPdf = (m.fileName || '').toLowerCase().endsWith('.pdf') || (m.slices && m.slices.some(s => s.pageNum !== undefined));
+        return isRecent && (isCandidatePdf ? mIsPdf : true) && m.slices && m.slices.length > 0;
       });
     }
 
@@ -3177,17 +3196,32 @@
           return;
         }
 
-        const isPdfTarget = (fileName && fileName.toLowerCase().endsWith('.pdf')) ||
+        let isPdfTarget = (fileName && fileName.toLowerCase().endsWith('.pdf')) ||
           (imageBlob && imageBlob.type === 'application/pdf') ||
           (matched.fileName && matched.fileName.toLowerCase().endsWith('.pdf'));
 
+        if (!isPdfTarget && imageBlob) {
+          try {
+            const sliceBuffer = await imageBlob.slice(0, 8).arrayBuffer();
+            const sliceText = new TextDecoder().decode(sliceBuffer);
+            if (sliceText.startsWith('%PDF')) {
+              isPdfTarget = true;
+            }
+          } catch (e) {}
+        }
+
         if (isPdfTarget) {
-          const pdfLib = typeof pdfjsLib !== 'undefined' ? pdfjsLib : (typeof window !== 'undefined' ? window.pdfjsLib : undefined);
-          const workerLib = typeof pdfjsWorker !== 'undefined' ? pdfjsWorker : (typeof window !== 'undefined' ? window.pdfjsWorker : undefined);
+          const pdfLib = typeof pdfjsLib !== 'undefined' ? pdfjsLib : (typeof window !== 'undefined' ? window.pdfjsLib : (typeof globalThis !== 'undefined' ? globalThis.pdfjsLib : undefined));
+          const workerLib = typeof pdfjsWorker !== 'undefined' ? pdfjsWorker : (typeof window !== 'undefined' ? window.pdfjsWorker : (typeof globalThis !== 'undefined' ? globalThis.pdfjsWorker : undefined));
           if (pdfLib) {
             try {
               if (workerLib && workerLib.WorkerMessageHandler) {
                 pdfLib.PDFWorker._mainThreadWorkerMessageHandler = workerLib.WorkerMessageHandler;
+              }
+              if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
+                try {
+                  pdfLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+                } catch (e) {}
               }
               const arrayBuffer = await imageBlob.arrayBuffer();
               const loadingTask = pdfLib.getDocument({
@@ -3212,17 +3246,31 @@
                 // Overlay unblurred slices for this page
                 const pageSlices = matched.slices.filter(s => (s.pageNum === pNum) || (!s.pageNum && pNum === 1));
                 for (const slice of pageSlices) {
-                  const sliceImg = new Image();
-                  await new Promise(res => {
-                    sliceImg.onload = res;
-                    sliceImg.onerror = res;
-                    sliceImg.src = slice.cropDataUrl;
-                  });
-                  const sx = Math.round(slice.normX * rCanvas.width);
-                  const sy = Math.round(slice.normY * rCanvas.height);
-                  const sw = Math.round(slice.normW * rCanvas.width);
-                  const sh = Math.round(slice.normH * rCanvas.height);
-                  rCtx.drawImage(sliceImg, sx, sy, sw, sh);
+                  try {
+                    let drawable = null;
+                    if (typeof createImageBitmap === 'function') {
+                      try {
+                        const sliceBlob = await fetch(slice.cropDataUrl).then(r => r.blob());
+                        drawable = await createImageBitmap(sliceBlob);
+                      } catch (bmpErr) {}
+                    }
+                    if (!drawable) {
+                      const sliceImg = new Image();
+                      await new Promise(res => {
+                        sliceImg.onload = res;
+                        sliceImg.onerror = res;
+                        sliceImg.src = slice.cropDataUrl;
+                      });
+                      drawable = sliceImg;
+                    }
+                    const sx = Math.round(slice.normX * rCanvas.width);
+                    const sy = Math.round(slice.normY * rCanvas.height);
+                    const sw = Math.round(slice.normW * rCanvas.width);
+                    const sh = Math.round(slice.normH * rCanvas.height);
+                    rCtx.drawImage(drawable, sx, sy, sw, sh);
+                  } catch (sliceErr) {
+                    console.warn('[Privora Shield] Failed to draw slice:', sliceErr);
+                  }
                 }
 
                 restoredCanvases.push(rCanvas);
@@ -3362,8 +3410,37 @@
           return;
         }
 
-        const candidateName = downloadAttr || (href.split('/').pop().split('?')[0]) || 'downloaded_image.png';
-        const matched = findMatchingManifest(manifests, candidateName);
+        let candidateName = downloadAttr || '';
+        if (!candidateName && href && !href.startsWith('blob:') && !href.startsWith('data:')) {
+          candidateName = href.split('/').pop().split('?')[0];
+        }
+        if (!candidateName || !candidateName.includes('.')) {
+          const ariaLabel = target.getAttribute('aria-label') || target.getAttribute('title') || '';
+          if (ariaLabel.match(/\.(pdf|png|jpe?g|webp|docx?|txt)$/i)) {
+            candidateName = ariaLabel;
+          } else {
+            const container = target.closest('li, [data-testid], div, article, section') || target.parentElement;
+            const containerMatch = container?.innerText?.match(/\b[a-zA-Z0-9_\-\.\s]+\.(?:pdf|png|jpe?g|webp|docx?|txt)\b/i);
+            if (containerMatch && containerMatch[0]) {
+              candidateName = containerMatch[0].trim();
+            }
+          }
+        }
+        if (!candidateName || candidateName.length < 3) {
+          candidateName = 'downloaded_document';
+        }
+
+        let matched = findMatchingManifest(manifests, candidateName);
+        if (!matched) {
+          const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
+          matched = manifests.find(m => {
+            const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+            return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
+          });
+          if (matched && matched.fileName) {
+            candidateName = matched.fileName;
+          }
+        }
 
         if (!matched || !matched.slices || matched.slices.length === 0) {
           resolve(false);
@@ -3378,7 +3455,7 @@
         showPrivoraHud({
           type: 'decrypting',
           title: 'Privora Shield · Auto-Decrypt',
-          subtitle: `Encrypted photo from ${window.location.hostname || 'site'} detected! Decrypting & restoring clean original...`,
+          subtitle: `Encrypted document detected! Decrypting & restoring clean original...`,
           durationMs: 0
         });
 
@@ -3419,7 +3496,9 @@
 
             const a = document.createElement('a');
             a.href = finalUrl;
-            a.download = downloadAttr || (result?.manifest?.fileName ? result.manifest.fileName : candidateName);
+            let finalDownloadName = result?.manifest?.fileName || downloadAttr || candidateName || 'decrypted_document.pdf';
+            finalDownloadName = finalDownloadName.replace(/^(encrypted_|masked_)/i, '');
+            a.download = finalDownloadName;
             a.dataset.aegisRestored = 'true';
             document.body.appendChild(a);
             a.click();
@@ -3427,11 +3506,14 @@
 
             const inKb = (result?.inputSize ? result.inputSize / 1024 : blob.size / 1024).toFixed(1);
             const outKb = (restoredBlob.size / 1024).toFixed(1);
+            const isPdfOutput = (finalDownloadName && finalDownloadName.toLowerCase().endsWith('.pdf')) || (restoredBlob.type === 'application/pdf');
 
             showPrivoraHud({
               type: 'decrypted',
               title: 'Privora Shield · Decrypted & Restored',
-              subtitle: `Clean original photo saved! Compressed size: ${inKb} KB → Restored: ${outKb} KB (Zero privacy loss) ✓`,
+              subtitle: isPdfOutput
+                ? `Clean original PDF saved! Restored unblurred document contents (Zero privacy loss) ✓`
+                : `Clean original photo saved! Compressed size: ${inKb} KB → Restored: ${outKb} KB (Zero privacy loss) ✓`,
               durationMs: 4500
             });
 
@@ -3474,34 +3556,26 @@
 
   // Intercept Download Link & Button Clicks
   document.addEventListener('click', (e) => {
+    if (!isShieldEnabled) return;
     if (e.target && e.target.dataset && e.target.dataset.aegisRestored === 'true') {
       return;
     }
 
     let target = e.target;
-    while (target && target.tagName !== 'A' && target.tagName !== 'BUTTON' && target !== document.body) {
-      target = target.parentElement;
+    const anchor = target.closest ? target.closest('a') : null;
+    if (anchor) {
+      target = anchor;
+    } else {
+      while (target && target.tagName !== 'A' && target.tagName !== 'BUTTON' && target !== document.body) {
+        target = target.parentElement;
+      }
     }
 
     if (!target || (target.tagName !== 'A' && target.tagName !== 'BUTTON')) return;
     if (target.dataset.aegisRestored === 'true') return;
 
-    // Check if the current website has ANY recorded encryption session or manifest
-    const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
-    const manifests = window._privoraRecentManifests || [];
-    const hasHostManifest = manifests.some(m => {
-      const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
-      return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
-    });
-
-    let hasSession = false;
-    try {
-      hasSession = sessionStorage.getItem('privora_has_encrypted') === 'true' || window._privoraSiteHasEncryptedFiles === true;
-    } catch (err) {}
-
-    // IF THIS SITE HAS NO ENCRYPTED MANIFESTS AND NO ENCRYPTION SESSION, NEVER INTERCEPT!
-    if (!isShieldEnabled) return;
-    if (!hasHostManifest && !hasSession) {
+    // If target is a standalone button without href or download attribute, allow natural click handler
+    if (target.tagName === 'BUTTON' && !target.getAttribute('href') && !target.getAttribute('download')) {
       return;
     }
 
@@ -3548,21 +3622,6 @@
       }
 
       if (!isShieldEnabled) {
-        return origClick.apply(this, arguments);
-      }
-
-      const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
-      const manifests = window._privoraRecentManifests || [];
-      const hasHostManifest = manifests.some(m => {
-        const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
-        return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
-      });
-      let hasSession = false;
-      try {
-        hasSession = sessionStorage.getItem('privora_has_encrypted') === 'true' || window._privoraSiteHasEncryptedFiles === true;
-      } catch (err) {}
-
-      if (!hasHostManifest && !hasSession) {
         return origClick.apply(this, arguments);
       }
 

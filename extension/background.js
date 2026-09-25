@@ -11,10 +11,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'STORE_MANIFEST' && message.manifest) {
     globalRecentManifests.unshift(message.manifest);
     if (globalRecentManifests.length > 30) globalRecentManifests.length = 30;
-    chrome.storage.local.get(['aegis_active_manifests'], (res) => {
+    chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
       const active = res.aegis_active_manifests || [];
-      active.unshift(message.manifest);
-      chrome.storage.local.set({ aegis_active_manifests: active.slice(0, 20) }, () => {
+      const filtered = active.filter(m => m.id !== message.manifest.id);
+      filtered.unshift(message.manifest);
+      chrome.storage.local.set({
+        aegis_active_manifests: filtered.slice(0, 25),
+        aegis_encrypted_manifests: filtered.slice(0, 25)
+      }, () => {
         sendResponse({ success: true });
       });
     });
@@ -45,8 +49,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_MANIFESTS') {
-    chrome.storage.local.get(['aegis_active_manifests'], (res) => {
-      const stored = res.aegis_active_manifests || [];
+    chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+      const stored = [...(res.aegis_active_manifests || []), ...(res.aegis_encrypted_manifests || [])];
       const combined = [...globalRecentManifests];
       for (const m of stored) {
         if (!combined.some(c => c.id === m.id)) combined.push(m);
@@ -57,7 +61,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'FETCH_BLOB' && message.url) {
-    fetch(message.url)
+    fetch(message.url, { credentials: 'include' })
       .then(res => res.blob())
       .then(blob => {
         const reader = new FileReader();
