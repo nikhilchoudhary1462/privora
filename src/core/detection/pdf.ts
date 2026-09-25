@@ -224,28 +224,38 @@ export class PdfProcessor {
    * Guarantees that single-line text items NEVER expand across multiple rows or columns.
    */
   public static findBoundingBoxForFinding(
-    finding: { type?: string; label?: string; value?: string },
+    finding: { type?: string; label?: string; value?: string; rawValue?: string },
     rawItems: any[],
     canvasWidth: number,
     canvasHeight: number
   ): BoundingBox | null {
-    if (!finding || !finding.value || !rawItems || rawItems.length === 0) return null;
+    if (!finding || !rawItems || rawItems.length === 0) return null;
 
-    const rawTarget = finding.value.trim();
+    const rawTarget = (finding.value || finding.rawValue || '').trim();
+    if (!rawTarget) return null;
+
     const cleanTarget = rawTarget.replace(/[-\s]/g, '').toLowerCase();
-    if (cleanTarget.length < 2) return null;
+    const normTarget = rawTarget.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    if (cleanTarget.length < 2 && normTarget.length < 2) return null;
 
-    // PASS 1: Direct Single-Item Exact or Substring Match (Tightest & Most Accurate)
+    // Phone 10-digit suffix fallback (e.g. +91 90000 12345 -> 9000012345)
+    const phoneSuffix10 = (normTarget.length >= 10 && /^\d+$/.test(normTarget)) ? normTarget.slice(-10) : null;
+
+    // PASS 1: Direct Single-Item Exact, Substring, or Normalized Match (Tightest & Most Accurate)
     for (const item of rawItems) {
       const itemStr = (item.str || '').trim();
       if (!itemStr) continue;
       const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
+      const normItem = itemStr.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
       const exactSub = itemStr.includes(rawTarget);
-      const cleanSub = (cleanItem.length >= 4 && cleanItem === cleanTarget) ||
-                       (cleanTarget.length >= 4 && cleanItem.includes(cleanTarget));
+      const cleanSub = (cleanItem.length >= 3 && cleanItem === cleanTarget) ||
+                       (cleanTarget.length >= 3 && cleanItem.includes(cleanTarget));
+      const normSub = (normTarget.length >= 4 && normItem.includes(normTarget)) ||
+                      (phoneSuffix10 && normItem.includes(phoneSuffix10)) ||
+                      (normTarget.length >= 6 && normItem.length >= 6 && (normItem.includes(normTarget) || normTarget.includes(normItem)));
 
-      if (exactSub || cleanSub) {
+      if (exactSub || cleanSub || normSub) {
         const tx = item.transform[4] * 1.5;
         const ty = canvasHeight - (item.transform[5] * 1.5);
         const tw = Math.max(16, (item.width || 40) * 1.5);
@@ -278,37 +288,51 @@ export class PdfProcessor {
       }
     }
 
-    // PASS 2: Contiguous consecutive items on the EXACT SAME LINE (e.g. split Aadhaar "1234 " + "5678 " + "9012")
+    // PASS 2: Contiguous consecutive items on the EXACT SAME LINE (e.g. split Aadhaar "1234 " + "5678 " + "9012" or "+91 " + "90000 12345")
     for (let i = 0; i < rawItems.length; i++) {
       const baseItem = rawItems[i];
       const baseTy = baseItem.transform ? baseItem.transform[5] : 0;
-      let accumulated = '';
+      let accumulatedClean = '';
+      let accumulatedNorm = '';
       const slice: any[] = [];
 
-      for (let j = i; j < Math.min(rawItems.length, i + 6); j++) {
+      for (let j = i; j < Math.min(rawItems.length, i + 8); j++) {
         const curItem = rawItems[j];
         const curTy = curItem.transform ? curItem.transform[5] : 0;
 
-        // CRITICAL: Items MUST be on the exact same line (within 5 points vertically)
-        if (Math.abs(curTy - baseTy) > 5) {
+        // CRITICAL: Items MUST be on the exact same line (within 6 points vertically)
+        if (Math.abs(curTy - baseTy) > 6) {
           break; // Stop immediately - do NOT cross rows or columns!
         }
 
         const curClean = (curItem.str || '').replace(/[-\s]/g, '').toLowerCase();
-        if (!curClean) continue;
+        const curNorm = (curItem.str || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+        if (!curClean && !curNorm) continue;
 
-        accumulated += curClean;
+        accumulatedClean += curClean;
+        accumulatedNorm += curNorm;
         slice.push(curItem);
 
-        if (accumulated.includes(cleanTarget)) {
-          const matchStart = accumulated.indexOf(cleanTarget);
-          const matchEnd = matchStart + cleanTarget.length;
+        const matched = (cleanTarget && accumulatedClean.includes(cleanTarget)) ||
+                        (normTarget && accumulatedNorm.includes(normTarget)) ||
+                        (phoneSuffix10 && accumulatedNorm.includes(phoneSuffix10));
+
+        if (matched) {
+          const targetToFind = (phoneSuffix10 && accumulatedNorm.includes(phoneSuffix10))
+            ? phoneSuffix10
+            : (normTarget && accumulatedNorm.includes(normTarget) ? normTarget : cleanTarget);
+          const matchTarget = targetToFind;
+          const searchSource = accumulatedNorm.includes(matchTarget) ? accumulatedNorm : accumulatedClean;
+          const matchStart = searchSource.indexOf(matchTarget);
+          const matchEnd = matchStart + matchTarget.length;
 
           // Filter slice to ONLY items that overlap [matchStart, matchEnd)
           let curCharPos = 0;
           const contributingItems: any[] = [];
           for (const it of slice) {
-            const itLen = (it.str || '').replace(/[-\s]/g, '').toLowerCase().length;
+            const itLen = (searchSource === accumulatedNorm)
+              ? (it.str || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase().length
+              : (it.str || '').replace(/[-\s]/g, '').toLowerCase().length;
             const itStart = curCharPos;
             const itEnd = curCharPos + itLen;
             if (itEnd > matchStart && itStart < matchEnd) {
@@ -317,34 +341,33 @@ export class PdfProcessor {
             curCharPos = itEnd;
           }
 
-          if (contributingItems.length > 0) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            contributingItems.forEach(it => {
-              const tx = it.transform[4] * 1.5;
-              const ty = canvasHeight - (it.transform[5] * 1.5);
-              const tw = Math.max(14, (it.width || 30) * 1.5);
-              const th = Math.max(12, (it.height || Math.abs(it.transform[0]) || 14) * 1.5);
+          const itemsToUse = contributingItems.length > 0 ? contributingItems : slice;
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          itemsToUse.forEach(it => {
+            const tx = it.transform[4] * 1.5;
+            const ty = canvasHeight - (it.transform[5] * 1.5);
+            const tw = Math.max(14, (it.width || 30) * 1.5);
+            const th = Math.max(12, (it.height || Math.abs(it.transform[0]) || 14) * 1.5);
 
-              minX = Math.min(minX, tx - 3);
-              minY = Math.min(minY, ty - th - 2);
-              maxX = Math.max(maxX, tx + tw + 3);
-              maxY = Math.max(maxY, ty + 2);
-            });
+            minX = Math.min(minX, tx - 3);
+            minY = Math.min(minY, ty - th - 2);
+            maxX = Math.max(maxX, tx + tw + 3);
+            maxY = Math.max(maxY, ty + 2);
+          });
 
-            const bx = Math.max(0, Math.round(minX));
-            const by = Math.max(0, Math.round(minY));
-            const bw = Math.min(canvasWidth - bx, Math.round(maxX - minX));
-            const bh = Math.min(32, Math.round(maxY - minY));
+          const bx = Math.max(0, Math.round(minX));
+          const by = Math.max(0, Math.round(minY));
+          const bw = Math.min(canvasWidth - bx, Math.round(maxX - minX));
+          const bh = Math.min(32, Math.round(maxY - minY));
 
-            return {
-              x: bx,
-              y: by,
-              width: bw,
-              height: bh,
-              label: finding.label,
-              isNormalized: false,
-            };
-          }
+          return {
+            x: bx,
+            y: by,
+            width: bw,
+            height: bh,
+            label: finding.label,
+            isNormalized: false,
+          };
         }
       }
     }

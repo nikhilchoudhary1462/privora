@@ -105,9 +105,13 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
   const [aiModelStatus, setAiModelStatus] = useState<LocalAiModelStatus>(LocalAiEngine.getStatus());
   const [isAiScanning, setIsAiScanning] = useState<boolean>(false);
   const [deepAiRan, setDeepAiRan] = useState<boolean>(false);
+  const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const previewModeRef = useRef<'ORIGINAL' | 'BLURRED_REGIONS' | 'ENCRYPTED_MASK' | 'SYNTHETIC_DATA'>(previewMode);
+  previewModeRef.current = previewMode;
+
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [dragMode, setDragMode] = useState<'DRAW_NEW' | 'MOVE' | 'RESIZE_TL' | 'RESIZE_TR' | 'RESIZE_BL' | 'RESIZE_BR' | null>(null);
@@ -115,7 +119,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
   const [canvasCursor, setCanvasCursor] = useState<string>('crosshair');
   const [sidePanelTab, setSidePanelTab] = useState<'uploads' | 'templates' | 'redaction' | 'synthetic' | 'ai' | 'export'>('uploads');
   const [isSidePanelOpen, setIsSidePanelOpen] = useState<boolean>(true);
-  const [emptyStageTab, setEmptyStageTab] = useState<'video' | '3d'>('video');
+  const [emptyStageTab, setEmptyStageTab] = useState<'upload' | 'video' | '3d'>('upload');
   const [isVideoModalOpen, setIsVideoModalOpen] = useState<boolean>(false);
 
   // Detect WebGPU hardware acceleration capabilities on mount
@@ -124,6 +128,13 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
       setAiHardwareInfo(info);
     });
   }, []);
+
+  // Handle preview mode switcher
+  const handleSetPreviewMode = (mode: 'ORIGINAL' | 'BLURRED_REGIONS' | 'ENCRYPTED_MASK' | 'SYNTHETIC_DATA') => {
+    setPreviewMode(mode);
+    previewModeRef.current = mode;
+    requestAnimationFrame(() => redrawCanvas(mode));
+  };
 
   // Handle page switching for multi-page documents (PDFs)
   const handlePageChange = (newIndex: number) => {
@@ -134,9 +145,10 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
   };
 
   // Render visual bounding boxes, handles & blur previews
-  const redrawCanvas = () => {
+  const redrawCanvas = (modeOverride?: 'ORIGINAL' | 'BLURRED_REGIONS' | 'ENCRYPTED_MASK' | 'SYNTHETIC_DATA') => {
     if (!previewImageUrl || !canvasRef.current) return;
 
+    const currentMode = modeOverride || previewModeRef.current || previewMode;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -157,10 +169,10 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
         i => !!i.boundingBox && (!i.pageNumber || !detection.pages || detection.pages.length <= 1 || i.pageNumber === targetPageNum)
       );
 
-      if (previewMode === 'SYNTHETIC_DATA') {
+      if (currentMode === 'SYNTHETIC_DATA') {
         // Render 100% format-preserving synthetic data overlay
         SyntheticEngine.renderSyntheticCanvasOverlay(canvas, itemsToRender, syntheticMappings, selectedItemId);
-      } else if (previewMode === 'BLURRED_REGIONS' || previewMode === 'ENCRYPTED_MASK') {
+      } else if (currentMode === 'BLURRED_REGIONS' || currentMode === 'ENCRYPTED_MASK') {
         // Render aesthetic cyber-lock blurred/pixelated masks on detected regions
         itemsToRender.forEach((item) => {
           const box = item.boundingBox!;
@@ -224,7 +236,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
           }
         });
       } else {
-        // Original mode: show thin colored bounding boxes
+        // ORIGINAL mode: show clean unmasked document with clear subtle bounding outlines
         itemsToRender.forEach((item) => {
           const box = item.boundingBox!;
           const bx = box.x <= 1 ? Math.floor(box.x * canvas.width) : Math.floor(box.x);
@@ -233,14 +245,16 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
           const bh = Math.max(15, box.height <= 1 ? Math.ceil(box.height * canvas.height) : Math.ceil(box.height));
 
           const isSelected = item.id === selectedItemId;
-          ctx.strokeStyle = isSelected ? '#22d3ee' : item.type === 'FACE' ? '#8b5cf6' : '#06b6d4';
-          ctx.lineWidth = isSelected ? 3 : Math.max(2, Math.floor(canvas.width / 450));
+          ctx.strokeStyle = isSelected ? '#2563eb' : item.type === 'FACE' ? 'rgba(147, 51, 234, 0.85)' : 'rgba(2, 132, 199, 0.85)';
+          ctx.lineWidth = isSelected ? 3 : 2;
+          ctx.setLineDash(isSelected ? [] : [4, 4]);
           ctx.strokeRect(bx, by, bw, bh);
+          ctx.setLineDash([]);
 
           const fontSize = Math.max(10, Math.min(13, Math.floor(canvas.width / 55)));
           ctx.font = `bold ${fontSize}px sans-serif`;
-          ctx.fillStyle = item.type === 'FACE' ? '#c084fc' : '#38bdf8';
-          ctx.fillText(`[${item.label}]`, bx + 4, Math.max(by - 4, fontSize + 2));
+          ctx.fillStyle = isSelected ? '#1e40af' : item.type === 'FACE' ? '#7e22ce' : '#0369a1';
+          ctx.fillText(`👁️ ${item.label}`, bx + 4, Math.max(by - 4, fontSize + 2));
 
           if (isSelected) {
             const handleSize = 10;
@@ -252,7 +266,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
               [bx + bw, by + bh],
             ];
             ctx.fillStyle = '#ffffff';
-            ctx.strokeStyle = '#0891b2';
+            ctx.strokeStyle = '#2563eb';
             ctx.lineWidth = 2;
             corners.forEach(([hx, hy]) => {
               ctx.fillRect(hx - halfH, hy - halfH, handleSize, handleSize);
@@ -1940,10 +1954,7 @@ console.log("Starting secure daemon...");`;
                     </span>
                     <div className="grid grid-cols-3 gap-1 bg-[#E2E1E6]/70 p-1 rounded-xl border border-black/5">
                       <button
-                        onClick={() => {
-                          setPreviewMode('ORIGINAL');
-                          requestAnimationFrame(redrawCanvas);
-                        }}
+                        onClick={() => handleSetPreviewMode('ORIGINAL')}
                         className={`py-1 text-xs font-medium rounded-lg transition-all ${
                           previewMode === 'ORIGINAL'
                             ? 'bg-white text-[#212529] font-bold shadow-minimal'
@@ -1953,10 +1964,7 @@ console.log("Starting secure daemon...");`;
                         Original
                       </button>
                       <button
-                        onClick={() => {
-                          setPreviewMode('BLURRED_REGIONS');
-                          requestAnimationFrame(redrawCanvas);
-                        }}
+                        onClick={() => handleSetPreviewMode('BLURRED_REGIONS')}
                         className={`py-1 text-xs font-medium rounded-lg transition-all ${
                           previewMode === 'BLURRED_REGIONS'
                             ? 'bg-[#9C8DD4] text-white font-bold shadow-minimal'
@@ -1966,10 +1974,7 @@ console.log("Starting secure daemon...");`;
                         Masked
                       </button>
                       <button
-                        onClick={() => {
-                          setPreviewMode('SYNTHETIC_DATA');
-                          requestAnimationFrame(redrawCanvas);
-                        }}
+                        onClick={() => handleSetPreviewMode('SYNTHETIC_DATA')}
                         className={`py-1 text-xs font-medium rounded-lg transition-all ${
                           previewMode === 'SYNTHETIC_DATA'
                             ? 'bg-[#4ADE80] text-[#14532D] font-bold shadow-minimal'
@@ -2477,39 +2482,33 @@ console.log("Starting secure daemon...");`;
             {previewImageUrl && (
               <div className="flex items-center gap-1 bg-white p-1 rounded-full border border-black/5 shadow-minimal">
                 <button
-                  onClick={() => {
-                    setPreviewMode('ORIGINAL');
-                    requestAnimationFrame(redrawCanvas);
-                  }}
-                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
+                  type="button"
+                  onClick={() => handleSetPreviewMode('ORIGINAL')}
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all cursor-pointer ${
                     previewMode === 'ORIGINAL'
-                      ? 'bg-[#9C8DD4] text-white font-bold'
+                      ? 'bg-[#2563eb] text-white font-bold shadow-sm'
                       : 'text-[#757575] hover:text-[#212529]'
                   }`}
                 >
-                  Original
+                  👁️ Original
                 </button>
                 <button
-                  onClick={() => {
-                    setPreviewMode('BLURRED_REGIONS');
-                    requestAnimationFrame(redrawCanvas);
-                  }}
-                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
+                  type="button"
+                  onClick={() => handleSetPreviewMode('BLURRED_REGIONS')}
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all cursor-pointer ${
                     previewMode === 'BLURRED_REGIONS'
-                      ? 'bg-[#9C8DD4] text-white font-bold'
+                      ? 'bg-[#9C8DD4] text-white font-bold shadow-sm'
                       : 'text-[#757575] hover:text-[#212529]'
                   }`}
                 >
-                  Masked
+                  🔒 Masked
                 </button>
                 <button
-                  onClick={() => {
-                    setPreviewMode('SYNTHETIC_DATA');
-                    requestAnimationFrame(redrawCanvas);
-                  }}
-                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
+                  type="button"
+                  onClick={() => handleSetPreviewMode('SYNTHETIC_DATA')}
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-all cursor-pointer ${
                     previewMode === 'SYNTHETIC_DATA'
-                      ? 'bg-[#4ADE80] text-[#14532D] font-bold'
+                      ? 'bg-[#4ADE80] text-[#14532D] font-bold shadow-sm'
                       : 'text-[#757575] hover:text-[#212529]'
                   }`}
                 >
@@ -2520,7 +2519,23 @@ console.log("Starting secure daemon...");`;
           </div>
 
           {/* Stage Viewport */}
-          <div className="flex-1 flex flex-col items-center justify-center overflow-auto min-h-[460px]">
+          <div 
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDraggingFile(true);
+            }}
+            onDragLeave={() => setIsDraggingFile(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDraggingFile(false);
+              if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                handleProcessFile(e.dataTransfer.files[0]);
+              }
+            }}
+            className={`flex-1 flex flex-col items-center justify-center overflow-auto min-h-[460px] transition-all ${
+              isDraggingFile ? 'ring-2 ring-[#9C8DD4] bg-[#FAF9F6]' : ''
+            }`}
+          >
             {isScanning ? (
               <div className="p-8 text-center space-y-3">
                 <RefreshCw className="w-8 h-8 text-[#9C8DD4] animate-spin mx-auto" />
@@ -2599,16 +2614,29 @@ console.log("Starting secure daemon...");`;
                   />
                 </div>
                 <p className="text-[11px] text-[#757575] font-mono text-center">
-                  💡 Drag on canvas to draw new redaction masks. Click any box to inspect & resize.
+                  💡 Drag on canvas to draw new redaction masks. Click any box to inspect & resize. Toggle between <b>Original</b>, <b>Masked</b>, and <b>Synthetic</b> above.
                 </p>
               </div>
             ) : (
-              /* When NO file is loaded: Working Video Demo & 3D Sandbox */
-              <div className="w-full max-w-3xl text-center space-y-5 py-4">
+              /* When NO file is loaded: Direct Dropzone & Sandbox Stage */
+              <div className="w-full max-w-3xl text-center space-y-4 py-3">
                 
-                {/* Switcher Pill: Video Demo vs 3D Model */}
+                {/* Switcher Pill: Direct Upload vs Video Demo vs 3D Core */}
                 <div className="inline-flex items-center p-1 bg-[#FAF9F6] border border-black/5 rounded-full shadow-inner">
                   <button
+                    type="button"
+                    onClick={() => setEmptyStageTab('upload')}
+                    className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                      emptyStageTab === 'upload'
+                        ? 'bg-white text-[#212529] shadow-minimal border border-black/5'
+                        : 'text-[#757575] hover:text-[#212529]'
+                    }`}
+                  >
+                    <UploadCloud className="w-3.5 h-3.5 text-[#9C8DD4]" />
+                    <span>Upload & Redact</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setEmptyStageTab('video')}
                     className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${
                       emptyStageTab === 'video'
@@ -2620,6 +2648,7 @@ console.log("Starting secure daemon...");`;
                     <span>Watch Working Demo</span>
                   </button>
                   <button
+                    type="button"
                     onClick={() => setEmptyStageTab('3d')}
                     className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${
                       emptyStageTab === '3d'
@@ -2632,8 +2661,28 @@ console.log("Starting secure daemon...");`;
                   </button>
                 </div>
 
-                {/* Display either the video player or 3D sandbox */}
-                {emptyStageTab === 'video' ? (
+                {/* Display Upload Zone / Video Player / 3D Sandbox */}
+                {emptyStageTab === 'upload' ? (
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-[#9C8DD4]/40 hover:border-[#9C8DD4] bg-white hover:bg-[#FAF9F6] rounded-3xl p-8 sm:p-12 text-center cursor-pointer transition-all shadow-minimal hover:shadow-purple-glow flex flex-col items-center justify-center space-y-3 group"
+                  >
+                    <div className="w-16 h-16 rounded-2xl bg-[#9C8DD4]/15 group-hover:bg-[#9C8DD4]/25 flex items-center justify-center text-[#9C8DD4] transition-all">
+                      <UploadCloud className="w-8 h-8" />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="text-base font-bold text-[#212529]">
+                        Drop your Photo or Document here, or <span className="text-[#9C8DD4] underline">browse files</span>
+                      </h3>
+                      <p className="text-xs text-[#757575] max-w-sm mx-auto">
+                        Supports Aadhaar / PAN card images, PNG, JPG, WEBP, and Multi-Page PDF documents. 100% On-Device & Zero Egress.
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FAF9F6] text-[10px] font-mono text-[#757575] border border-black/5">
+                      🔒 Zero Server Egress · Client-Side WASM & WebGPU
+                    </span>
+                  </div>
+                ) : emptyStageTab === 'video' ? (
                   <div className="relative w-full rounded-3xl overflow-hidden shadow-minimal border border-black/5 bg-black/95 aspect-video max-h-[380px] flex items-center justify-center group mx-auto">
                     <video
                       src="/working.mp4"
@@ -2655,80 +2704,55 @@ console.log("Starting secure daemon...");`;
                   <ThreeStudioModel className="w-full h-56 sm:h-64" badgeText="Interactive 3D Cryptographic Sandbox" />
                 )}
 
-                <div className="space-y-1.5">
-                  <h3 className="text-lg font-bold text-[#212529] tracking-tight">
-                    On-Device Neural Redaction & Envelope Cryptography
-                  </h3>
-                  <p className="text-xs text-[#757575] max-w-md mx-auto">
-                    Upload your own photo or document below, or select a pre-loaded benchmark scenario from the left tool panel to visually redact and cryptographically protect.
-                  </p>
-                </div>
-
-                {/* Primary Upload CTA Button */}
-                <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-[#A99DD8] hover:bg-[#8A7BC7] text-white font-bold text-xs shadow-minimal hover:shadow-purple-glow transition-all cursor-pointer"
-                  >
-                    <UploadCloud className="w-4 h-4" />
-                    <span>Upload Photo or Document</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSidePanelTab('templates');
-                      setIsSidePanelOpen(true);
-                    }}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white hover:bg-[#FAF9F6] text-[#212529] font-semibold text-xs border border-black/5 shadow-minimal transition-all cursor-pointer"
-                  >
-                    <LayoutTemplate className="w-4 h-4 text-[#9C8DD4]" />
-                    <span>Browse Templates</span>
-                  </button>
-                </div>
-
                 {/* Visual Quick-Start Cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2">
-                  <div
-                    onClick={() => handleLoadSample('ID')}
-                    className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
-                  >
-                    <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
-                      <UserCheck className="w-4 h-4" />
+                <div className="space-y-1.5 pt-1 text-left">
+                  <span className="text-[10px] font-bold text-[#757575] font-mono uppercase tracking-wider">
+                    Or 1-Click Load Benchmark Document:
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    <div
+                      onClick={() => handleLoadSample('ID')}
+                      className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
+                        <UserCheck className="w-4 h-4" />
+                      </div>
+                      <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Aadhaar & PAN</p>
+                      <p className="text-[10px] text-[#757575]">Verhoeff D₅ Check</p>
                     </div>
-                    <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Aadhaar & PAN</p>
-                    <p className="text-[10px] text-[#757575]">Verhoeff D₅ Check</p>
-                  </div>
 
-                  <div
-                    onClick={() => handleLoadSample('FINANCE')}
-                    className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
-                  >
-                    <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
-                      <CreditCard className="w-4 h-4" />
+                    <div
+                      onClick={() => handleLoadSample('FINANCE')}
+                      className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
+                        <CreditCard className="w-4 h-4" />
+                      </div>
+                      <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Invoice</p>
+                      <p className="text-[10px] text-[#757575]">Luhn Mod-10 Check</p>
                     </div>
-                    <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Invoice</p>
-                    <p className="text-[10px] text-[#757575]">Luhn Mod-10 Check</p>
-                  </div>
 
-                  <div
-                    onClick={() => handleLoadSample('CODE')}
-                    className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
-                  >
-                    <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
-                      <FileCode className="w-4 h-4" />
+                    <div
+                      onClick={() => handleLoadSample('CODE')}
+                      className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
+                        <FileCode className="w-4 h-4" />
+                      </div>
+                      <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">API Secrets</p>
+                      <p className="text-[10px] text-[#757575]">Shannon Entropy</p>
                     </div>
-                    <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">API Secrets</p>
-                    <p className="text-[10px] text-[#757575]">Shannon Entropy</p>
-                  </div>
 
-                  <div
-                    onClick={() => handleLoadSample('PHOTO')}
-                    className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
-                  >
-                    <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
-                      <MapPin className="w-4 h-4" />
+                    <div
+                      onClick={() => handleLoadSample('PHOTO')}
+                      className="p-3 bg-white rounded-2xl border border-black/5 hover:border-[#9C8DD4] hover:shadow-minimal cursor-pointer transition-all space-y-1 text-left group"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-[#9C8DD4]/15 flex items-center justify-center text-[#9C8DD4]">
+                        <MapPin className="w-4 h-4" />
+                      </div>
+                      <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Photo Geotag</p>
+                      <p className="text-[10px] text-[#757575]">EXIF Neutralizer</p>
                     </div>
-                    <p className="text-xs font-bold text-[#212529] group-hover:text-[#9C8DD4] mt-1">Photo Geotag</p>
-                    <p className="text-[10px] text-[#757575]">EXIF Neutralizer</p>
                   </div>
                 </div>
               </div>

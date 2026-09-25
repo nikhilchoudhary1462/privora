@@ -243,12 +243,18 @@ export class OcrEngine {
 
         if (targetDigits.length === 12) {
           for (const line of lines) {
-            // Build digit stream for this specific line
+            // Build digit stream for this specific line with OCR character normalization
             let lineDigits = '';
             const digitToBoxMap: OcrWordBox[] = [];
 
             for (const wb of line.boxes) {
-              const wbDigits = wb.text.replace(/\D/g, '');
+              const normalizedWb = wb.text
+                .replace(/[Oo]/g, '0')
+                .replace(/[Il|]/g, '1')
+                .replace(/[Bb]/g, '8')
+                .replace(/[Ss]/g, '5')
+                .replace(/[Zz]/g, '2');
+              const wbDigits = normalizedWb.replace(/\D/g, '');
               for (let d = 0; d < wbDigits.length; d++) {
                 lineDigits += wbDigits[d];
                 digitToBoxMap.push(wb);
@@ -258,7 +264,7 @@ export class OcrEngine {
             const matchIndex = lineDigits.indexOf(targetDigits);
             if (matchIndex !== -1) {
               const matchedSet = new Set<OcrWordBox>();
-              for (let k = matchIndex; k < matchIndex + 12; k++) {
+              for (let k = matchIndex; k < Math.min(digitToBoxMap.length, matchIndex + 12); k++) {
                 matchedSet.add(digitToBoxMap[k]);
               }
               bestMatchBoxes = Array.from(matchedSet);
@@ -354,20 +360,20 @@ export class OcrEngine {
         let estBox: BoundingBox | null = null;
         if (item.type === 'AADHAAR') {
           estBox = {
-            x: Math.round(origWidth * 0.22),
-            y: Math.round(origHeight * 0.68),
-            width: Math.round(origWidth * 0.58),
-            height: Math.max(24, Math.round(origHeight * 0.10)),
+            x: Math.round(origWidth * 0.28),
+            y: Math.round(origHeight * 0.76),
+            width: Math.round(origWidth * 0.44),
+            height: Math.max(22, Math.round(origHeight * 0.07)),
             label: `${item.label}: ${item.value}`,
             isNormalized: false,
             boxConfidence: 'ESTIMATED',
           };
         } else if (item.type === 'PAN_CARD') {
           estBox = {
-            x: Math.round(origWidth * 0.22),
-            y: Math.round(origHeight * 0.60),
-            width: Math.round(origWidth * 0.56),
-            height: Math.max(22, Math.round(origHeight * 0.09)),
+            x: Math.round(origWidth * 0.24),
+            y: Math.round(origHeight * 0.62),
+            width: Math.round(origWidth * 0.46),
+            height: Math.max(20, Math.round(origHeight * 0.07)),
             label: `${item.label}: ${item.value}`,
             isNormalized: false,
             boxConfidence: 'ESTIMATED',
@@ -375,9 +381,9 @@ export class OcrEngine {
         } else if (item.type === 'DOB') {
           estBox = {
             x: Math.round(origWidth * 0.28),
-            y: Math.round(origHeight * 0.36),
-            width: Math.round(origWidth * 0.44),
-            height: Math.max(18, Math.round(origHeight * 0.08)),
+            y: Math.round(origHeight * 0.38),
+            width: Math.round(origWidth * 0.38),
+            height: Math.max(18, Math.round(origHeight * 0.06)),
             label: `${item.label}: ${item.value}`,
             isNormalized: false,
             boxConfidence: 'ESTIMATED',
@@ -385,9 +391,9 @@ export class OcrEngine {
         } else if (item.type === 'PHONE') {
           estBox = {
             x: Math.round(origWidth * 0.28),
-            y: Math.round(origHeight * 0.45),
-            width: Math.round(origWidth * 0.45),
-            height: Math.max(18, Math.round(origHeight * 0.08)),
+            y: Math.round(origHeight * 0.48),
+            width: Math.round(origWidth * 0.40),
+            height: Math.max(18, Math.round(origHeight * 0.06)),
             label: `${item.label}: ${item.value}`,
             isNormalized: false,
             boxConfidence: 'ESTIMATED',
