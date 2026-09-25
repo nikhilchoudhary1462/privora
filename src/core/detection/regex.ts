@@ -310,16 +310,16 @@ export class RegexDetector {
       }
     }
 
-    // 7. Phones
-    const phoneRegex = /(?:\+91[-\s]?)?\b[6-9]\d{9}\b|\b(?:\+?1[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}\b/g;
+    // 7. Phones (Supports +91 / international, with 5-5 grouping, 3-3-4 grouping, or continuous 10 digits)
+    const phoneRegex = /(?:\+91[-\s]?)?\b[6-9]\d{4}[-\s]\d{5}\b|(?:\+91[-\s]?)?\b[6-9]\d{2}[-\s]\d{3}[-\s]\d{4}\b|(?:\+91[-\s]?)?\b[6-9]\d{9}\b|\b(?:\+?1[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}\b/g;
     while ((match = phoneRegex.exec(text)) !== null) {
       if (this.validatePhone(match[0])) {
         results.push({
           id: `pii_phone_${idCounter++}`,
           type: 'PHONE',
           label: 'Phone Number',
-          value: match[0],
-          confidence: 0.92,
+          value: match[0].trim(),
+          confidence: 0.95,
           complianceTags: ['GDPR', 'DPDP_INDIA'],
           recommendation: 'Personal telecommunication identifier.',
         });
@@ -329,7 +329,9 @@ export class RegexDetector {
     // 8. API Keys & Secrets
     const apiKeyRegexes = [
       { regex: /AKIA[0-9A-Z]{16}/g, label: 'AWS Access Key ID' },
-      { regex: /sk-(?:proj-)?[a-zA-Z0-9_\-]{20,64}/g, label: 'OpenAI / Secret API Key' },
+      { regex: /(?:test_|demo_|live_|prod_)?sk[_-](?:proj[_-]|live[_-]|test[_-])?[a-zA-Z0-9_\-]{8,64}/g, label: 'API Secret Key' },
+      { regex: /(?:test_|demo_)?api[_-](?:key[_-]|secret[_-])?[a-zA-Z0-9_\-]{6,64}/g, label: 'API Key / Secret' },
+      { regex: /(?:demo_|test_)?tok[_-][a-zA-Z0-9_\-]{8,64}/g, label: 'Access / Auth Token' },
       { regex: /ghp_[a-zA-Z0-9]{36}/g, label: 'GitHub Personal Token' },
       { regex: /-----BEGIN PRIVATE KEY-----/g, label: 'RSA / TLS Private Key' },
       { regex: /ey[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g, label: 'JSON Web Token (JWT)' },
@@ -337,14 +339,50 @@ export class RegexDetector {
 
     for (const rule of apiKeyRegexes) {
       while ((match = rule.regex.exec(text)) !== null) {
+        if (!results.some(r => r.value === match![0])) {
+          results.push({
+            id: `pii_key_${idCounter++}`,
+            type: 'API_KEY',
+            label: rule.label,
+            value: match[0],
+            confidence: 0.99,
+            complianceTags: ['IDENTITY_THEFT_PREVENTION'],
+            recommendation: 'Critical secret credential requiring immediate encryption.',
+          });
+        }
+      }
+    }
+
+    // 8b. Labeled Secret Credentials & Passwords
+    const labeledSecretRegex = /(?:(?:API\s*(?:Key|secret)|Access\s*Token|Secret\s*Key|Password|Auth\s*Token)(?:-like\s*value|\s*value|\s*secret)?\s*[:=\s]\s*)([^\s,;]+)/gi;
+    while ((match = labeledSecretRegex.exec(text)) !== null) {
+      const secretVal = match[1]?.trim();
+      if (secretVal && secretVal.length >= 4 && !results.some(r => r.value === secretVal)) {
         results.push({
-          id: `pii_key_${idCounter++}`,
+          id: `pii_secret_${idCounter++}`,
           type: 'API_KEY',
-          label: rule.label,
-          value: match[0],
-          confidence: 0.99,
+          label: 'Secret Credential / Token',
+          value: secretVal,
+          confidence: 0.98,
           complianceTags: ['IDENTITY_THEFT_PREVENTION'],
-          recommendation: 'Critical secret credential requiring immediate encryption.',
+          recommendation: 'Confidential secret token requiring immediate protection.',
+        });
+      }
+    }
+
+    // 8c. Labeled OTP (One-Time Password)
+    const otpRegex = /(?:(?:OTP|One-Time\s*Password|Verification\s*Code)\s*[:\-\s=]\s*)([0-9]{4,8})\b/gi;
+    while ((match = otpRegex.exec(text)) !== null) {
+      const otpVal = match[1]?.trim();
+      if (otpVal && !results.some(r => r.value === otpVal)) {
+        results.push({
+          id: `pii_otp_${idCounter++}`,
+          type: 'API_KEY',
+          label: 'One-Time Password (OTP)',
+          value: otpVal,
+          confidence: 0.98,
+          complianceTags: ['IDENTITY_THEFT_PREVENTION'],
+          recommendation: 'Temporary authentication secret requiring immediate masking.',
         });
       }
     }
@@ -480,7 +518,7 @@ export class RegexDetector {
       }
     }
 
-    const pinRegex = /\b(?:PIN|Postal Code|Pincode|Pin Code)?\s*[:\-\s]?([1-9][0-9]{2}\s?[0-9]{3})\b/gi;
+    const pinRegex = /\b(?:PIN|Postal Code|Pincode|Pin Code)\s*[:\-\s]?([1-9][0-9]{2}\s?[0-9]{3})\b/gi;
     while ((match = pinRegex.exec(text)) !== null) {
       const pinVal = match[1]?.trim();
       if (pinVal && !results.some(r => r.value && r.value.includes(pinVal))) {
@@ -489,7 +527,7 @@ export class RegexDetector {
           type: 'ADDRESS',
           label: 'Postal PIN Code',
           value: pinVal,
-          confidence: 0.88,
+          confidence: 0.92,
           complianceTags: ['DPDP_INDIA'],
           recommendation: 'Geographic postal code identifying local jurisdiction.',
         });

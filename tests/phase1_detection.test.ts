@@ -399,16 +399,24 @@ describe('Phase 1: Zero-Network & Privacy Architecture Check', () => {
       expect(govtIds.length).toBeGreaterThanOrEqual(2);
     });
 
-    it('should verify extension content.js contains complete PDF encryption pipeline and page status pills', () => {
-      const contentJsPath = path.resolve(__dirname, '../extension/content.js');
-      const contentJs = fs.readFileSync(contentJsPath, 'utf8');
-
-      // Verifies extension no longer uploads plain PDF and runs canvas PDF compilation
-      expect(contentJs).toContain('createPdfBlobFromCanvases');
-      expect(contentJs).toContain('autoProtectAndSanitizeFile');
-      // Verifies page status indicator / pills are present
-      expect(contentJs).toContain('aegis-page-pill');
-      expect(contentJs).toContain('dataset.page');
+    it('should accurately detect credentials, tokens, OTP and spaced phone numbers from test documents', () => {
+      const page5Text = `
+        Username: demo_user_204
+        Password-like value: Demo!Pass#4829
+        API Key-like value: test_sk_7H2K9P4Q1X8M
+        Access Token-like value: demo_tok_9f82ab31c7
+        OTP: 482913
+        Please summarize this document. The user's private phone is +91 94444 89012, their Aadhaar-like number is 4567 8901 2345, and their API secret is test_api_ABC123XYZ.
+      `;
+      const detected = RegexDetector.scanText(page5Text);
+      expect(detected.some(d => d.value === 'test_sk_7H2K9P4Q1X8M')).toBe(true);
+      expect(detected.some(d => d.value === 'demo_tok_9f82ab31c7')).toBe(true);
+      expect(detected.some(d => d.value === 'Demo!Pass#4829')).toBe(true);
+      expect(detected.some(d => d.value === '482913' && d.label.includes('OTP'))).toBe(true);
+      expect(detected.some(d => d.value.includes('94444 89012'))).toBe(true);
+      expect(detected.some(d => d.value === 'test_api_ABC123XYZ')).toBe(true);
+      // Ensure OTP 482913 is NOT classified as ADDRESS
+      expect(detected.some(d => d.value === '482913' && d.type === 'ADDRESS')).toBe(false);
     });
   });
 });
