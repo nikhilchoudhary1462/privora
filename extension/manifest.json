@@ -7,7 +7,9 @@
     "storage",
     "unlimitedStorage",
     "activeTab",
-    "downloads"
+    "downloads",
+    "clipboardRead",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -24,11 +26,17 @@
       "matches": ["<all_urls>"],
       "js": ["lib/pdf.worker.min.js", "lib/pdf.min.js", "content.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["page_hook.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["lib/pdf.worker.min.js", "lib/pdf.min.js"],
+      "resources": ["lib/pdf.worker.min.js", "lib/pdf.min.js", "page_hook.js"],
       "matches": ["<all_urls>"]
     }
   ]

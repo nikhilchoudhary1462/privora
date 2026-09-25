@@ -4038,6 +4038,18 @@
     return `${fName} ${lName}`;
   }
 
+  function syncVaultToDom() {
+    try {
+      const list = window._privoraTokenVault || [];
+      const serialized = JSON.stringify(list);
+      if (document.documentElement) {
+        document.documentElement.setAttribute('data-privora-vault', serialized);
+      }
+      try { sessionStorage.setItem('privora_token_vault', serialized); } catch (e) {}
+      window.postMessage({ type: 'PRIVORA_SYNC_VAULT', vault: list }, '*');
+    } catch (e) {}
+  }
+
   function syncTokenVaultFromStorage() {
     try {
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
@@ -4047,6 +4059,7 @@
             (window._privoraTokenVault || []).forEach(t => map.set(t.synthetic, t));
             res.privora_token_vault.forEach(t => map.set(t.synthetic, t));
             window._privoraTokenVault = Array.from(map.values());
+            syncVaultToDom();
           }
         });
       }
@@ -4059,6 +4072,7 @@
     (window._privoraTokenVault || []).forEach(t => map.set(t.synthetic, t));
     newTokens.forEach(t => map.set(t.synthetic, t));
     window._privoraTokenVault = Array.from(map.values()).slice(-200);
+    syncVaultToDom();
 
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
@@ -4068,7 +4082,29 @@
     }
   }
 
+  // Cross-tab storage synchronization listener
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.privora_token_vault && changes.privora_token_vault.newValue) {
+        window._privoraTokenVault = changes.privora_token_vault.newValue;
+        syncVaultToDom();
+      }
+    });
+  }
+
   syncTokenVaultFromStorage();
+  syncVaultToDom();
+
+  // Inject page_hook.js dynamically as secondary safety net
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
+      const hookUrl = chrome.runtime.getURL('page_hook.js');
+      const scriptEl = document.createElement('script');
+      scriptEl.src = hookUrl;
+      (document.head || document.documentElement).appendChild(scriptEl);
+      scriptEl.onload = () => scriptEl.remove();
+    }
+  } catch (e) {}
 
   // -------------------------------------------------------------
   // 9a. Compact Non-Intrusive Floating Text Interception Prompt
@@ -4735,9 +4771,49 @@
   // 12. Real-Time AI Response Auto-Decryption (DOM Scanner)
   // -------------------------------------------------------------
   function setupAiResponseAutoDecryption() {
+    function injectBadgeStyles() {
+      if (document.getElementById('privora-token-styles')) return;
+      const style = document.createElement('style');
+      style.id = 'privora-token-styles';
+      style.textContent = `
+        .privora-decrypted-token {
+          position: relative !important;
+          display: inline-flex !important;
+          align-items: center !important;
+          border-bottom: 2px solid #10b981 !important;
+          background: rgba(16, 185, 129, 0.12) !important;
+          padding: 0 4px !important;
+          border-radius: 4px !important;
+          color: #059669 !important;
+          font-weight: 600 !important;
+          vertical-align: baseline !important;
+          cursor: pointer !important;
+        }
+        .privora-decrypted-token::after {
+          content: " \\1F512 DECRYPTED" !important;
+          user-select: none !important;
+          -webkit-user-select: none !important;
+          font-size: 9px !important;
+          line-height: 1.1 !important;
+          background: #065f46 !important;
+          color: #a7f3d0 !important;
+          padding: 1px 5px !important;
+          border-radius: 9999px !important;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+          font-weight: 700 !important;
+          margin-left: 5px !important;
+          pointer-events: none !important;
+          display: inline-block !important;
+        }
+      `;
+      (document.head || document.documentElement).appendChild(style);
+    }
+    injectBadgeStyles();
+
     function decryptElementText(element) {
       if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
       if (element.classList && (element.classList.contains('privora-hud-toast') || element.classList.contains('privora-decrypted-token'))) return;
+      if (element.closest && element.closest('.privora-decrypted-token, [data-privora-decrypted="true"]')) return;
 
       // CRITICAL: NEVER touch active input composers, textareas, or form inputs!
       if (
@@ -4779,7 +4855,7 @@
 
       for (const { textNode, tok } of replacements) {
         const parent = textNode.parentNode;
-        if (!parent || (parent.classList && parent.classList.contains('privora-decrypted-token'))) continue;
+        if (!parent || (parent.closest && parent.closest('.privora-decrypted-token, [data-privora-decrypted="true"]'))) continue;
 
         const val = textNode.nodeValue;
         const parts = val.split(tok.synthetic);
@@ -4790,23 +4866,11 @@
           if (idx < parts.length - 1) {
             const span = document.createElement('span');
             span.className = 'privora-decrypted-token';
+            span.setAttribute('data-privora-decrypted', 'true');
             span.setAttribute('data-privora-synthetic', tok.synthetic);
             span.setAttribute('data-privora-real', tok.original);
             span.title = `Privora: Real ${tok.type} auto-decrypted from AI synthetic token (${tok.synthetic})`;
-            span.style.cssText = `
-              border-bottom: 2px solid #10b981;
-              background: rgba(16, 185, 129, 0.12);
-              padding: 1px 6px;
-              border-radius: 4px;
-              color: #059669;
-              font-weight: 600;
-              display: inline-flex;
-              align-items: center;
-              gap: 4px;
-              cursor: pointer;
-              transition: all 0.2s ease;
-            `;
-            span.innerHTML = `<span>${tok.original}</span><span style="user-select:none;-webkit-user-select:none;font-size:9px;background:#065f46;color:#a7f3d0;padding:1px 5px;border-radius:9999px;font-family:monospace;font-weight:700;pointer-events:none;">🔒 DECRYPTED</span>`;
+            span.textContent = tok.original; // Pure real text, badge rendered strictly via CSS ::after
             frag.appendChild(span);
           }
         });
@@ -4814,6 +4878,12 @@
         try {
           parent.replaceChild(frag, textNode);
         } catch (e) {}
+
+        // If parent or ancestor is <a> tag, update its href so mailto/links point to real value
+        const link = (parent.closest && parent.closest('a')) || (parent.tagName === 'A' ? parent : null);
+        if (link && link.href && link.href.includes(tok.synthetic)) {
+          link.href = link.href.split(tok.synthetic).join(tok.original);
+        }
       }
     }
 
@@ -4843,6 +4913,17 @@
   // -------------------------------------------------------------
   // 13. Reversible Clipboard Copy Decryption
   // -------------------------------------------------------------
+  window.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'PRIVORA_CLIPBOARD_RESTORED') {
+      showPrivoraHud({
+        type: 'success',
+        title: 'Privora Shield · Clipboard Restored',
+        subtitle: `Restored ${event.data.hits || 1} real value(s) in copied content without dummy tokens!`,
+        durationMs: 3000
+      });
+    }
+  });
+
   document.addEventListener('copy', (e) => {
     const vault = window._privoraTokenVault || [];
     const selection = window.getSelection()?.toString();
@@ -4857,26 +4938,73 @@
       }
     }
 
-    const hadBadge = restored.includes('DECRYPTED') || restored.includes('🔒');
-    if (hadBadge) {
-      // Strip any badge tag artifact from clipboard so copied text is 100% clean
-      restored = restored.replace(/[\s\u00A0]*🔒[\s\u00A0]*DECRYPTED/gi, '');
-      restored = restored.replace(/[\s\u00A0]*\[\s*🔒?\s*DECRYPTED\s*\]/gi, '');
-    }
+    // Safety strip any badge text artifacts
+    restored = restored.replace(/[\s\u00A0]*\uD83D\uDD12[\s\u00A0]*DECRYPTED/gi, '');
+    restored = restored.replace(/[\s\u00A0]*\[\s*\uD83D\uDD12?\s*DECRYPTED\s*\]/gi, '');
+    restored = restored.replace(/[\s\u00A0]*DECRYPTED/gi, '');
 
-    if (hitCount > 0 || hadBadge) {
+    if (hitCount > 0 || restored !== selection) {
       if (e.clipboardData) {
         e.clipboardData.setData('text/plain', restored);
         e.preventDefault();
-        if (hitCount > 0) {
-          showPrivoraHud({
-            type: 'success',
-            title: 'Privora Shield · Clipboard Restored',
-            subtitle: `Restored ${hitCount} real value(s) in copied text without token placeholders.`,
-            durationMs: 3000
-          });
-        }
+        showPrivoraHud({
+          type: 'success',
+          title: 'Privora Shield · Clipboard Restored',
+          subtitle: `Restored ${hitCount > 0 ? hitCount + ' real value(s)' : 'text'} in copied content!`,
+          durationMs: 3000
+        });
       }
+    }
+  }, true);
+
+  // Fallback click listener for copy buttons
+  document.addEventListener('click', (e) => {
+    const target = e.target;
+    if (!target) return;
+    const btn = target.closest ? target.closest('button, [role="button"]') : null;
+    if (!btn) return;
+
+    const label = (btn.getAttribute('aria-label') || btn.title || btn.innerText || btn.className || '').toLowerCase();
+    const isCopyButton = label.includes('copy') || 
+                         (btn.closest && btn.closest('[data-testid*="copy" i]')) ||
+                         (btn.getAttribute && btn.getAttribute('data-testid')?.toLowerCase().includes('copy')) ||
+                         btn.querySelector('svg');
+
+    if (isCopyButton) {
+      setTimeout(async () => {
+        try {
+          const vault = window._privoraTokenVault || [];
+          if (vault.length === 0) return;
+
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            const text = await navigator.clipboard.readText();
+            if (!text || text.length < 3) return;
+
+            let restored = text;
+            let hits = 0;
+            for (const tok of vault) {
+              if (tok.synthetic && restored.includes(tok.synthetic)) {
+                restored = restored.split(tok.synthetic).join(tok.original);
+                hits++;
+              }
+            }
+
+            restored = restored.replace(/[\s\u00A0]*\uD83D\uDD12[\s\u00A0]*DECRYPTED/gi, '');
+            restored = restored.replace(/[\s\u00A0]*\[\s*\uD83D\uDD12?\s*DECRYPTED\s*\]/gi, '');
+            restored = restored.replace(/[\s\u00A0]*DECRYPTED/gi, '');
+
+            if (hits > 0 || restored !== text) {
+              await navigator.clipboard.writeText(restored);
+              showPrivoraHud({
+                type: 'success',
+                title: 'Privora Shield · Clipboard Restored',
+                subtitle: `Restored ${hits > 0 ? hits + ' real value(s)' : 'text'} in copied content!`,
+                durationMs: 3000
+              });
+            }
+          }
+        } catch (err) {}
+      }, 70);
     }
   }, true);
 
