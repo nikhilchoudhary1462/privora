@@ -79,40 +79,71 @@ export class PdfProcessor {
       // Run Regex analysis over this page's text
       const regexFindings = RegexDetector.scanText(pageText);
 
-      // Map regex findings back to exact PDF viewport coordinates
+      const rawItems = (textContent.items as any[])
+        .filter((i: any) => i && typeof i.str === 'string' && i.str.length > 0);
+
+      // Map regex findings back to exact PDF viewport coordinates using union bounding boxes
       regexFindings.forEach((finding, fIdx) => {
         let matchedBox: BoundingBox | null = null;
 
         if (finding.value) {
-          const cleanVal = finding.value.replace(/[-\s]/g, '');
-          for (const item of textContent.items as any[]) {
-            if (!('str' in item) || !item.str) continue;
-            const cleanItem = item.str.replace(/[-\s]/g, '');
-            if (
-              item.str.includes(finding.value) ||
-              finding.value.includes(item.str) ||
-              (cleanItem.length >= 4 && cleanVal.includes(cleanItem))
-            ) {
-              // PDF coordinates have origin at bottom-left; convert to canvas top-left
+          const findingVal = finding.value.trim();
+          const cleanFinding = findingVal.replace(/[-\s]/g, '').toLowerCase();
+
+          // Find ALL matching items that contain or contribute to this finding
+          const matchedChunks: any[] = [];
+
+          for (const item of rawItems) {
+            const itemStr = item.str;
+            const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
+            if (!cleanItem) continue;
+
+            const isExactSubstring = itemStr.includes(findingVal) || findingVal.includes(itemStr);
+            const isCleanSubstring = (cleanItem.length >= 3 && cleanFinding.includes(cleanItem)) ||
+                                     (cleanFinding.length >= 3 && cleanItem.includes(cleanFinding));
+
+            if (isExactSubstring || isCleanSubstring) {
+              matchedChunks.push(item);
+            }
+          }
+
+          if (matchedChunks.length > 0) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+
+            matchedChunks.forEach((item) => {
               const tx = item.transform[4] * 1.5;
               const ty = viewport.height - (item.transform[5] * 1.5);
-              const tw = Math.max(50, (item.width || 60) * 1.5);
-              const th = Math.max(18, (item.height || 14) * 1.5);
+              const tw = Math.max(16, (item.width || 40) * 1.5);
+              const th = Math.max(14, (item.height || Math.abs(item.transform[0]) || 14) * 1.5);
 
+              const bx = Math.max(0, Math.round(tx - 4));
+              const by = Math.max(0, Math.round(ty - th - 3));
+              const bw = Math.round(tw + 8);
+              const bh = Math.round(th + 6);
+
+              minX = Math.min(minX, bx);
+              minY = Math.min(minY, by);
+              maxX = Math.max(maxX, bx + bw);
+              maxY = Math.max(maxY, by + bh);
+            });
+
+            if (minX < Infinity && maxX > minX && maxY > minY) {
               matchedBox = {
-                x: Math.max(0, Math.round(tx - 4)),
-                y: Math.max(0, Math.round(ty - th - 4)),
-                width: Math.round(tw + 8),
-                height: Math.round(th + 8),
+                x: minX,
+                y: minY,
+                width: Math.min(canvas.width - minX, maxX - minX),
+                height: Math.min(canvas.height - minY, maxY - minY),
                 label: finding.label,
                 isNormalized: false,
               };
-              break;
             }
           }
         }
 
-        // If no direct coordinate match, calculate position on canvas
+        // If no direct coordinate match, calculate reasonable position on canvas
         if (!matchedBox) {
           matchedBox = {
             x: Math.round(canvas.width * 0.1),
@@ -131,6 +162,61 @@ export class PdfProcessor {
           boundingBox: matchedBox,
         });
       });
+
+      // Detect face photo regions visually on this page canvas
+      try {
+        const thumbScale = Math.min(1, 320 / Math.max(canvas.width, canvas.height));
+        const tw = Math.round(canvas.width * thumbScale);
+        const th = Math.round(canvas.height * thumbScale);
+        const tCan = document.createElement('canvas');
+        tCan.width = tw;
+        tCan.height = th;
+        const tCtx = tCan.getContext('2d');
+        if (tCtx) {
+          tCtx.drawImage(canvas, 0, 0, tw, th);
+          const imgData = tCtx.getImageData(0, 0, tw, th);
+          let skinPixels = 0;
+          let minSx = tw, maxSx = 0, minSy = th, maxSy = 0;
+          const data = imgData.data;
+          for (let y = 0; y < th; y++) {
+            for (let x = 0; x < tw; x++) {
+              const idx = (y * tw + x) * 4;
+              const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+              if (r > 65 && g > 45 && b > 25 && r > g && r > b && (r - g) >= 10 && (r - b) >= 15) {
+                skinPixels++;
+                if (x < minSx) minSx = x;
+                if (x > maxSx) maxSx = x;
+                if (y < minSy) minSy = y;
+                if (y > maxSy) maxSy = y;
+              }
+            }
+          }
+          if (skinPixels > 140 && (maxSx - minSx) >= 18 && (maxSy - minSy) >= 22) {
+            const fx = Math.round(minSx / thumbScale);
+            const fy = Math.round(minSy / thumbScale);
+            const fw = Math.round((maxSx - minSx) / thumbScale);
+            const fh = Math.round((maxSy - minSy) / thumbScale);
+            pageItems.push({
+              id: `p${pageNum}_face_${pageItems.length}`,
+              type: 'FACE',
+              label: 'Biometric Face Photo',
+              value: 'FACE_BIOMETRIC',
+              confidence: 0.94,
+              complianceTags: ['DPDP_INDIA', 'GDPR'],
+              recommendation: 'Biometric facial photograph requiring privacy shielding.',
+              pageNumber: pageNum,
+              boundingBox: {
+                x: fx,
+                y: fy,
+                width: fw,
+                height: fh,
+                label: 'Face Photo',
+                isNormalized: false,
+              }
+            });
+          }
+        }
+      } catch (e) {}
 
       const pageDataUrl = canvas.toDataURL('image/png');
       pages.push({

@@ -2413,8 +2413,15 @@ console.log("Starting secure daemon...");`;
                 >
                   ◀
                 </button>
-                <span className="text-xs font-bold text-[#212529] font-mono px-1">
-                  Page {currentPageIndex + 1} / {detection.pages.length}
+                <span className="text-xs font-bold text-[#212529] font-mono px-1 flex items-center gap-1.5">
+                  <span>Page {currentPageIndex + 1} / {detection.pages.length}</span>
+                  {detection.detectedItems.some(i => (i.pageNumber === currentPageIndex + 1 || (!i.pageNumber && currentPageIndex === 0)) && !!i.boundingBox) ? (
+                    <span className="text-[10px] bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded-full font-bold">
+                      🔒 Masked
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-[#9ca3af]">✓ Clean</span>
+                  )}
                 </span>
                 <button
                   type="button"
@@ -2478,6 +2485,54 @@ console.log("Starting secure daemon...");`;
               </div>
             ) : previewImageUrl ? (
               <div className="space-y-3 w-full flex flex-col items-center">
+                {/* PDF Page Strip with Highlighted Encryption Status */}
+                {detection?.pages && detection.pages.length > 1 && (
+                  <div className="w-full max-w-2xl px-3 py-2 bg-white/95 backdrop-blur border border-black/8 rounded-2xl flex flex-wrap items-center justify-between gap-2 shadow-minimal">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] font-bold text-[#757575] font-mono uppercase tracking-wider mr-1">
+                        PDF Pages:
+                      </span>
+                      {detection.pages.map((p, pIdx) => {
+                        const count = detection.detectedItems.filter(
+                          i => (i.pageNumber === p.pageNumber || (!i.pageNumber && p.pageNumber === 1)) && !!i.boundingBox
+                        ).length;
+                        const isEncrypted = count > 0;
+                        const isCurrent = currentPageIndex === pIdx;
+                        return (
+                          <button
+                            key={p.pageNumber}
+                            type="button"
+                            onClick={() => handlePageChange(pIdx)}
+                            className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all ${
+                              isCurrent
+                                ? 'bg-[#212529] text-white shadow-minimal ring-2 ring-[#9C8DD4]'
+                                : isEncrypted
+                                ? 'bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] hover:bg-[#D1FAE5]'
+                                : 'bg-[#FAF9F6] text-[#757575] border border-black/5 hover:border-black/20'
+                            }`}
+                            title={`Switch to Page ${p.pageNumber} (${isEncrypted ? `${count} items encrypted` : 'Clean page'})`}
+                          >
+                            <span>Page {p.pageNumber}</span>
+                            {isEncrypted ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#047857] text-white font-extrabold flex items-center gap-0.5">
+                                🔒 {count}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-[#9ca3af]">✓ Clean</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="text-[11px] font-mono text-[#757575] flex items-center gap-1">
+                      <span>Encrypted:</span>
+                      <span className="font-bold text-[#047857]">
+                        {detection.pages.filter(p => detection.detectedItems.some(i => (i.pageNumber === p.pageNumber || (!i.pageNumber && p.pageNumber === 1)) && !!i.boundingBox)).length} / {detection.pages.length} Pages
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 <div 
                   className="relative rounded-2xl overflow-hidden bg-[#212529] border border-black/5 flex items-center justify-center max-w-full select-none shadow-minimal"
                   style={{ cursor: canvasCursor }}

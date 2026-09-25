@@ -272,7 +272,7 @@ export class RegexDetector {
     }
 
     // 7. Phones
-    const phoneRegex = /(?:\+?91[-\s]?)?[6-9]\d{9}\b|\b(?:\+?1[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}\b/g;
+    const phoneRegex = /(?:\+91[-\s]?)?\b[6-9]\d{9}\b|\b(?:\+?1[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}\b/g;
     while ((match = phoneRegex.exec(text)) !== null) {
       if (this.validatePhone(match[0])) {
         results.push({
@@ -324,7 +324,21 @@ export class RegexDetector {
       });
     }
 
-    // 10. Date of Birth (DOB) - Explicit Labels (English & Hindi) and Date Patterns
+    // 10. Masked Aadhaar Number (e.g. XXXX XXXX 1234 or •••• •••• 1234)
+    const maskedAadhaarRegex = /(?<=(?:^|\s|[:;,-]))([xX*•]{4}[\s-]?[xX*•]{4}[\s-]?[0-9]{4})\b/gu;
+    while ((match = maskedAadhaarRegex.exec(text)) !== null) {
+      results.push({
+        id: `pii_masked_aadhaar_${idCounter++}`,
+        type: 'AADHAAR',
+        label: 'Masked Aadhaar Number',
+        value: match[1],
+        confidence: 0.95,
+        complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
+        recommendation: 'Masked Aadhaar identifier requiring privacy safeguarding.',
+      });
+    }
+
+    // 11. Date of Birth (DOB) - Explicit Labels (English & Hindi) and Date Patterns
     const seenDobValues = new Set<string>();
 
     const labeledDobRegex = /(?:जन्म\s*(?:तारीख|तिथि)\s*\/\s*DOB|जन्म\s*वर्ष\s*\/\s*(?:Year\s*of\s*Birth|YOB)|DOB|D\.O\.B\.?|Date\s*of\s*Birth|Birth\s*Date|Year\s*of\s*Birth|YOB|Y\.O\.B\.?|जन्म\s*(?:तिथि|तारीख|वर्ष))\s*[:\/\-\s]*([0-3]?\d[\/\-\.][0-1]?\d[\/\-\.](?:19|20)\d{2}|[0-3]?\d[\/\-\s,]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\/\-\s,]+(?:19|20)\d{2}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\/\-\s,]+[0-3]?\d[\/\-\s,]+(?:19|20)\d{2}|(?:19|20)\d{2}[\/\-\.][0-1]?\d[\/\-\.][0-3]?\d|(?:19|20)\d{2})/gi;
@@ -348,7 +362,6 @@ export class RegexDetector {
     const standaloneDateRegex = /\b([0-3]\d[\/\-\.][0-1]\d[\/\-\.](?:19[2-9]\d|20[0-2]\d))\b/g;
     while ((match = standaloneDateRegex.exec(text)) !== null) {
       const candidate = match[1]?.trim();
-      // Ensure this date is not already captured as part of credit card, phone, or existing DOB
       if (candidate && this.validateDOB(candidate) && !seenDobValues.has(candidate)) {
         seenDobValues.add(candidate);
         results.push({
@@ -361,6 +374,141 @@ export class RegexDetector {
           recommendation: 'Date of Birth requires privacy masking or pseudonymization under DPDP Act & GDPR.',
         });
       }
+    }
+
+    // 12. Full Name & Demographic Identity
+    const nameRegex = /(?:(?:Name|Full Name|नाम|Customer Name|Holder Name|Candidate Name|Applicant Name)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
+    while ((match = nameRegex.exec(text)) !== null) {
+      const val = match[1]?.trim();
+      if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender)$/i.test(val)) {
+        results.push({
+          id: `pii_name_${idCounter++}`,
+          type: 'NAME',
+          label: 'Full Name / Demographic',
+          value: val,
+          confidence: 0.93,
+          complianceTags: ['DPDP_INDIA', 'GDPR'],
+          recommendation: 'Full legal name subject to DPDP & GDPR privacy safeguards.',
+        });
+      }
+    }
+
+    // 13. Guardian / Relative (Father's Name, Husband's Name, C/O, S/O, D/O, W/O)
+    const guardianRegex = /(?:(?:Father's Name|Care of|C\/O|S\/O|D\/O|W\/O|पिता\s*का\s*नाम|पति\s*का\s*नाम)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
+    while ((match = guardianRegex.exec(text)) !== null) {
+      const val = match[1]?.trim();
+      if (val && val.length >= 3) {
+        results.push({
+          id: `pii_guardian_${idCounter++}`,
+          type: 'NAME',
+          label: 'Guardian / Relative Name',
+          value: val,
+          confidence: 0.92,
+          complianceTags: ['DPDP_INDIA', 'GDPR'],
+          recommendation: 'Family relationship details linked to citizen identity.',
+        });
+      }
+    }
+
+    // 14. Gender / Sex
+    const genderRegex = /(?:(?:Gender|Sex|लिंग)\s*[:\-\/\s]\s*)(MALE|FEMALE|TRANSGENDER|पुरुष|महिला)\b/gi;
+    while ((match = genderRegex.exec(text)) !== null) {
+      results.push({
+        id: `pii_gender_${idCounter++}`,
+        type: 'CUSTOM',
+        label: 'Gender Demographic',
+        value: match[1],
+        confidence: 0.95,
+        complianceTags: ['DPDP_INDIA', 'GDPR'],
+        recommendation: 'Gender demographic attribute.',
+      });
+    }
+
+    // 15. Residential Address & PIN Code
+    const addressRegex = /(?:(?:Address|Residential Address|Residing at|पता)\s*[:\-\/\s]\s*)([^\n\r]{8,90})(?=[;\n\r]|$)/gi;
+    while ((match = addressRegex.exec(text)) !== null) {
+      const addrVal = match[1]?.trim();
+      if (addrVal && addrVal.length >= 8) {
+        results.push({
+          id: `pii_address_${idCounter++}`,
+          type: 'ADDRESS',
+          label: 'Residential Address',
+          value: addrVal,
+          confidence: 0.91,
+          complianceTags: ['DPDP_INDIA', 'GDPR'],
+          recommendation: 'Physical address revealing exact residence location.',
+        });
+      }
+    }
+
+    const pinRegex = /\b(?:PIN|Postal Code|Pincode|Pin Code)?\s*[:\-\s]?([1-9][0-9]{2}\s?[0-9]{3})\b/gi;
+    while ((match = pinRegex.exec(text)) !== null) {
+      const pinVal = match[1]?.trim();
+      if (pinVal && !results.some(r => r.value && r.value.includes(pinVal))) {
+        results.push({
+          id: `pii_pin_${idCounter++}`,
+          type: 'ADDRESS',
+          label: 'Postal PIN Code',
+          value: pinVal,
+          confidence: 0.88,
+          complianceTags: ['DPDP_INDIA'],
+          recommendation: 'Geographic postal code identifying local jurisdiction.',
+        });
+      }
+    }
+
+    // 16. Financial Information: Bank Account Number & IFSC Code
+    const ifscRegex = /\b([A-Z]{4}0[A-Z0-9]{6})\b/g;
+    while ((match = ifscRegex.exec(text)) !== null) {
+      results.push({
+        id: `pii_ifsc_${idCounter++}`,
+        type: 'FINANCIAL_DATA',
+        label: 'Bank IFSC Code',
+        value: match[1],
+        confidence: 0.98,
+        complianceTags: ['PCI_DSS', 'DPDP_INDIA'],
+        recommendation: 'Bank routing identifier linked to personal account.',
+      });
+    }
+
+    const bankAccRegex = /(?:(?:A\/C(?:\s*(?:No|Number|\.))?|Account(?:\s*(?:No|Number|\.))?|खाता\s*(?:संख्या|नंबर)?)\s*[:\-\s]*)([0-9]{9,18})\b/gi;
+    while ((match = bankAccRegex.exec(text)) !== null) {
+      results.push({
+        id: `pii_bank_acc_${idCounter++}`,
+        type: 'FINANCIAL_DATA',
+        label: 'Bank Account Number',
+        value: match[1],
+        confidence: 0.96,
+        complianceTags: ['PCI_DSS', 'DPDP_INDIA'],
+        recommendation: 'Sensitive bank account number.',
+      });
+    }
+
+    // 17. Voter ID (EPIC) & Driving License
+    const voterIdRegex = /\b([A-Z]{3}[0-9]{7})\b/g;
+    while ((match = voterIdRegex.exec(text)) !== null) {
+      results.push({
+        id: `pii_voter_${idCounter++}`,
+        type: 'GOVERNMENT_ID',
+        label: 'Voter ID (EPIC)',
+        value: match[1],
+        confidence: 0.94,
+        complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
+        recommendation: 'Electoral identity number.',
+      });
+    }
+
+    const dlRegex = /\b([A-Z]{2}[-\s]?[0-9]{2,4}[-\s]?[0-9]{7,11})\b/g;
+    while ((match = dlRegex.exec(text)) !== null) {
+      results.push({
+        id: `pii_dl_${idCounter++}`,
+        type: 'DRIVING_LICENSE',
+        label: 'Driving License Number',
+        value: match[1],
+        confidence: 0.93,
+        complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
+        recommendation: 'Motor vehicle driving license document.',
+      });
     }
 
     return results;

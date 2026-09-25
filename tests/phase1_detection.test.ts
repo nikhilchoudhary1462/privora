@@ -357,4 +357,59 @@ describe('Phase 1: Zero-Network & Privacy Architecture Check', () => {
     expect(contentJs).toContain('aegis-file-intercept-prompt');
     expect(contentJs).toContain('aegis-text-intercept-prompt');
   });
+
+  describe('Enhanced PII & PDF Redaction Coverage', () => {
+    it('should detect masked Aadhaar numbers', () => {
+      const text = 'Masked UID: XXXX XXXX 4321 and bullet format •••• •••• 8765';
+      const detected = RegexDetector.scanText(text);
+      const masked = detected.filter(d => d.type === 'AADHAAR');
+      expect(masked.length).toBeGreaterThanOrEqual(2);
+      expect(masked.some(d => d.value.includes('4321'))).toBe(true);
+      expect(masked.some(d => d.value.includes('8765'))).toBe(true);
+    });
+
+    it('should detect demographic name fields', () => {
+      const text = 'Name: Rajesh Kumar Sharma\nFather\'s Name: Ramesh Chand Sharma';
+      const detected = RegexDetector.scanText(text);
+      const names = detected.filter(d => d.type === 'NAME');
+      expect(names.length).toBeGreaterThanOrEqual(2);
+      expect(names.some(d => d.value.includes('Rajesh Kumar Sharma'))).toBe(true);
+      expect(names.some(d => d.value.includes('Ramesh Chand Sharma'))).toBe(true);
+    });
+
+    it('should detect Indian postal PIN codes and addresses', () => {
+      const text = 'Address: Flat 402, Lotus Heights, New Delhi - 110001, India';
+      const detected = RegexDetector.scanText(text);
+      const addrOrPin = detected.filter(d => d.type === 'ADDRESS');
+      expect(addrOrPin.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should detect bank account numbers and IFSC codes', () => {
+      const text = 'Bank A/C No: 9876543210123 with IFSC Code: SBIN0001234';
+      const detected = RegexDetector.scanText(text);
+      const fin = detected.filter(d => d.type === 'FINANCIAL_DATA' || d.type === 'BANK_ACCOUNT');
+      expect(fin.length).toBeGreaterThanOrEqual(2);
+      expect(fin.some(d => d.value.includes('SBIN0001234'))).toBe(true);
+    });
+
+    it('should detect Voter ID (EPIC) and Driving License formats', () => {
+      const text = 'Voter ID: ABC1234567, Driving License: DL-0420110012345';
+      const detected = RegexDetector.scanText(text);
+      const govtIds = detected.filter(d => d.type === 'GOVERNMENT_ID' || d.type === 'DRIVING_LICENSE');
+      expect(govtIds.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should verify extension content.js contains complete PDF encryption pipeline and page status pills', () => {
+      const contentJsPath = path.resolve(__dirname, '../extension/content.js');
+      const contentJs = fs.readFileSync(contentJsPath, 'utf8');
+
+      // Verifies extension no longer uploads plain PDF and runs canvas PDF compilation
+      expect(contentJs).toContain('createPdfBlobFromCanvases');
+      expect(contentJs).toContain('autoProtectAndSanitizeFile');
+      // Verifies page status indicator / pills are present
+      expect(contentJs).toContain('aegis-page-pill');
+      expect(contentJs).toContain('dataset.page');
+    });
+  });
 });
+

@@ -242,6 +242,75 @@
       }
     }
 
+    // 9. Masked Aadhaar Number (XXXX XXXX 1234 or •••• •••• 1234)
+    const maskedAadhaarRegex = /(?<=(?:^|\s|[:;,-]))([xX*•]{4}[\s-]?[xX*•]{4}[\s-]?[0-9]{4})\b/gu;
+    while ((match = maskedAadhaarRegex.exec(text)) !== null) {
+      results.push({ type: 'AADHAAR', label: 'Masked Aadhaar Number', value: match[1] });
+    }
+
+    // 10. Full Name & Demographic Identity
+    const nameRegex = /(?:(?:Name|Full Name|नाम|Customer Name|Holder Name|Candidate Name|Applicant Name)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
+    while ((match = nameRegex.exec(text)) !== null) {
+      const val = match[1]?.trim();
+      if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender)$/i.test(val)) {
+        results.push({ type: 'NAME', label: 'Full Name / Demographic', value: val });
+      }
+    }
+
+    // 11. Guardian / Relative (Father's Name, Husband's Name, C/O, S/O, D/O, W/O)
+    const guardianRegex = /(?:(?:Father's Name|Care of|C\/O|S\/O|D\/O|W\/O|पिता\s*का\s*नाम|पति\s*का\s*नाम)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
+    while ((match = guardianRegex.exec(text)) !== null) {
+      const val = match[1]?.trim();
+      if (val && val.length >= 3) {
+        results.push({ type: 'NAME', label: 'Guardian / Relative Name', value: val });
+      }
+    }
+
+    // 12. Gender / Sex
+    const genderRegex = /(?:(?:Gender|Sex|लिंग)\s*[:\-\/\s]\s*)(MALE|FEMALE|TRANSGENDER|पुरुष|महिला)\b/gi;
+    while ((match = genderRegex.exec(text)) !== null) {
+      results.push({ type: 'CUSTOM', label: 'Gender Demographic', value: match[1] });
+    }
+
+    // 13. Residential Address & PIN Code
+    const addressRegex = /(?:(?:Address|Residential Address|Residing at|पता)\s*[:\-\/\s]\s*)([^\n\r]{8,90})(?=[;\n\r]|$)/gi;
+    while ((match = addressRegex.exec(text)) !== null) {
+      const addrVal = match[1]?.trim();
+      if (addrVal && addrVal.length >= 8) {
+        results.push({ type: 'ADDRESS', label: 'Residential Address', value: addrVal });
+      }
+    }
+
+    const pinRegex = /\b(?:PIN|Postal Code|Pincode|Pin Code)?\s*[:\-\s]?([1-9][0-9]{2}\s?[0-9]{3})\b/gi;
+    while ((match = pinRegex.exec(text)) !== null) {
+      const pinVal = match[1]?.trim();
+      if (pinVal && !results.some(r => r.value && r.value.includes(pinVal))) {
+        results.push({ type: 'ADDRESS', label: 'Postal PIN Code', value: pinVal });
+      }
+    }
+
+    // 14. Financial Information: Bank Account Number & IFSC Code
+    const ifscRegex = /\b([A-Z]{4}0[A-Z0-9]{6})\b/g;
+    while ((match = ifscRegex.exec(text)) !== null) {
+      results.push({ type: 'FINANCIAL_DATA', label: 'Bank IFSC Code', value: match[1] });
+    }
+
+    const bankAccRegex = /(?:(?:A\/C(?:\s*(?:No|Number|\.))?|Account(?:\s*(?:No|Number|\.))?|खाता\s*(?:संख्या|नंबर)?)\s*[:\-\s]*)([0-9]{9,18})\b/gi;
+    while ((match = bankAccRegex.exec(text)) !== null) {
+      results.push({ type: 'FINANCIAL_DATA', label: 'Bank Account Number', value: match[1] });
+    }
+
+    // 15. Voter ID (EPIC) & Driving License
+    const voterIdRegex = /\b([A-Z]{3}[0-9]{7})\b/g;
+    while ((match = voterIdRegex.exec(text)) !== null) {
+      results.push({ type: 'GOVERNMENT_ID', label: 'Voter ID (EPIC)', value: match[1] });
+    }
+
+    const dlRegex = /\b([A-Z]{2}[-\s]?[0-9]{2,4}[-\s]?[0-9]{7,11})\b/g;
+    while ((match = dlRegex.exec(text)) !== null) {
+      results.push({ type: 'DRIVING_LICENSE', label: 'Driving License Number', value: match[1] });
+    }
+
     return results;
   }
 
@@ -1022,6 +1091,200 @@
     }
 
     if (isPdf) {
+      if (typeof pdfjsLib !== 'undefined') {
+        try {
+          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+          }
+        } catch (e) {}
+
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          const loadingTask = pdfjsLib.getDocument({
+            data: new Uint8Array(arrayBuffer),
+            useSystemFonts: true,
+          });
+          const pdfDoc = await loadingTask.promise;
+          const totalPages = Math.max(1, pdfDoc.numPages);
+          const maskedCanvases = [];
+          const allPdfPages = [];
+
+          for (let pNum = 1; pNum <= totalPages; pNum++) {
+            const page = await pdfDoc.getPage(pNum);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const pCanvas = document.createElement('canvas');
+            pCanvas.width = Math.round(viewport.width);
+            pCanvas.height = Math.round(viewport.height);
+            const pCtx = pCanvas.getContext('2d', { willReadFrequently: true });
+
+            await page.render({
+              canvasContext: pCtx,
+              viewport: viewport,
+            }).promise;
+
+            const textContent = await page.getTextContent();
+            const rawItems = (textContent.items || []).filter(i => i && typeof i.str === 'string');
+            const pageText = rawItems.map(i => i.str).join(' ');
+
+            const piiItems = scanText(pageText);
+            const pageBoxes = [];
+
+            // Multi-chunk union bounding box mapping
+            piiItems.forEach(finding => {
+              if (!finding.value) return;
+              const findingVal = finding.value.trim();
+              const cleanFinding = findingVal.replace(/[-\s]/g, '').toLowerCase();
+
+              const matchedChunks = [];
+              for (const item of rawItems) {
+                const itemStr = item.str;
+                const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
+                if (!cleanItem) continue;
+
+                const isExact = itemStr.includes(findingVal) || findingVal.includes(itemStr);
+                const isClean = (cleanItem.length >= 3 && cleanFinding.includes(cleanItem)) ||
+                                (cleanFinding.length >= 3 && cleanItem.includes(cleanFinding));
+
+                if (isExact || isClean) {
+                  matchedChunks.push(item);
+                }
+              }
+
+              if (matchedChunks.length > 0) {
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                matchedChunks.forEach(item => {
+                  const tx = item.transform[4] * 1.5;
+                  const ty = viewport.height - (item.transform[5] * 1.5);
+                  const tw = Math.max(16, (item.width || 40) * 1.5);
+                  const th = Math.max(14, (item.height || Math.abs(item.transform[0]) || 14) * 1.5);
+
+                  const bx = Math.max(0, Math.round(tx - 4));
+                  const by = Math.max(0, Math.round(ty - th - 3));
+                  const bw = Math.round(tw + 8);
+                  const bh = Math.round(th + 6);
+
+                  minX = Math.min(minX, bx);
+                  minY = Math.min(minY, by);
+                  maxX = Math.max(maxX, bx + bw);
+                  maxY = Math.max(maxY, by + bh);
+                });
+
+                if (minX < Infinity && maxX > minX && maxY > minY) {
+                  pageBoxes.push({
+                    x: minX,
+                    y: minY,
+                    width: Math.min(pCanvas.width - minX, maxX - minX),
+                    height: Math.min(pCanvas.height - minY, maxY - minY),
+                    label: finding.label
+                  });
+                }
+              }
+            });
+
+            // Also detect face photos or visual ID photo blocks on canvas
+            try {
+              const faceBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name);
+              faceBoxes.forEach(fb => {
+                if (!pageBoxes.some(pb => Math.abs(pb.x - fb.x) < 30 && Math.abs(pb.y - fb.y) < 30)) {
+                  pageBoxes.push(fb);
+                }
+              });
+            } catch (e) {}
+
+            // Draw privacy masks on canvas copy
+            const maskedCanvas = document.createElement('canvas');
+            maskedCanvas.width = pCanvas.width;
+            maskedCanvas.height = pCanvas.height;
+            const mCtx = maskedCanvas.getContext('2d');
+            mCtx.drawImage(pCanvas, 0, 0);
+
+            pageBoxes.forEach(box => {
+              const bx = Math.max(0, Math.round(box.x));
+              const by = Math.max(0, Math.round(box.y));
+              const bw = Math.min(maskedCanvas.width - bx, Math.round(box.width));
+              const bh = Math.min(maskedCanvas.height - by, Math.round(box.height));
+              if (bw > 0 && bh > 0) {
+                mCtx.save();
+                mCtx.beginPath();
+                mCtx.rect(bx, by, bw, bh);
+                mCtx.clip();
+                mCtx.fillStyle = '#0f172a';
+                mCtx.fillRect(bx, by, bw, bh);
+
+                const blockSize = Math.max(6, Math.floor(Math.min(bw, bh) / 8));
+                for (let y = by; y < by + bh; y += blockSize) {
+                  for (let x = bx; x < bx + bw; x += blockSize) {
+                    const tileW = Math.min(blockSize, bx + bw - x);
+                    const tileH = Math.min(blockSize, by + bh - y);
+                    mCtx.fillStyle = (Math.floor(x / blockSize) + Math.floor(y / blockSize)) % 2 === 0
+                      ? 'rgba(15, 23, 42, 0.98)'
+                      : 'rgba(51, 65, 85, 0.98)';
+                    mCtx.fillRect(x, y, tileW, tileH);
+                  }
+                }
+                mCtx.restore();
+              }
+            });
+
+            maskedCanvases.push(maskedCanvas);
+            allPdfPages.push({
+              pageNum: pNum,
+              canvas: pCanvas,
+              pageDataUrl: pCanvas.toDataURL('image/png'),
+              text: pageText,
+              boxes: pageBoxes,
+              detectedPii: piiItems
+            });
+          }
+
+          // Build encrypted PDF blob
+          const maskedPdfBlob = createPdfBlobFromCanvases(maskedCanvases);
+          const sanitizedPdfFile = new File([maskedPdfBlob], file.name, { type: 'application/pdf' });
+
+          const rawBuffer = await file.arrayBuffer();
+          const origHash = await computeSHA256(rawBuffer);
+          const manifest = {
+            id: 'aegis_' + Date.now(),
+            fileName: file.name,
+            baseName: file.name.replace(/\.[^/.]+$/, ''),
+            originalWidth: maskedCanvases[0]?.width || 800,
+            originalHeight: maskedCanvases[0]?.height || 1000,
+            originalFileSize: file.size,
+            maskedFileSize: maskedPdfBlob.size,
+            origHash,
+            timestamp: Date.now(),
+            slices: [],
+            origin: window.location.origin,
+            hostname: window.location.hostname,
+          };
+          saveManifest(manifest);
+
+          const previewPageIdx = allPdfPages.findIndex(p => p.boxes.length > 0);
+          const previewCanvas = maskedCanvases[previewPageIdx >= 0 ? previewPageIdx : 0] || maskedCanvases[0];
+          const maskedDataUrl = previewCanvas ? previewCanvas.toDataURL('image/jpeg', 0.82) : '';
+
+          showEncryptedImagePreviewCard({
+            file,
+            maskedBlob: maskedPdfBlob,
+            maskedDataUrl,
+            detectedBoxes: allPdfPages.flatMap(p => p.boxes),
+            onConfirmAuto: () => {
+              if (onConfirmAuto) onConfirmAuto(sanitizedPdfFile);
+            },
+            onOpenFullScreen: () => {
+              if (onOpenEditor) onOpenEditor(allPdfPages.flatMap(p => p.boxes));
+            },
+            onAllowPlaintext,
+            onCancel,
+          });
+
+          return sanitizedPdfFile;
+        } catch (pdfErr) {
+          console.warn('[Privora Shield] PDF processing error, falling back:', pdfErr);
+        }
+      }
+
+      // Fallback if pdfjsLib fails
       const rawBuffer = await file.arrayBuffer();
       const origHash = await computeSHA256(rawBuffer);
       const manifest = {
@@ -1404,6 +1667,7 @@
     let pdfPages = [];
     let currentPdfPageIdx = 0;
     let pageNavContainer = null;
+    let switchPdfPage = (targetIdx) => {};
 
     function updatePageNavUI() {
       if (!pageNavContainer) return;
@@ -1412,10 +1676,55 @@
         return;
       }
       pageNavContainer.style.display = 'flex';
-      const pageIndicator = pageNavContainer.querySelector('#aegis-page-indicator');
-      if (pageIndicator) {
-        pageIndicator.textContent = `Page ${currentPdfPageIdx + 1} of ${pdfPages.length}`;
-      }
+      pageNavContainer.innerHTML = '';
+
+      const btnPrev = document.createElement('button');
+      btnPrev.type = 'button';
+      btnPrev.style.cssText = 'background:#212529; color:#fff; border:none; border-radius:6px; padding:3px 8px; font-weight:bold; cursor:pointer; font-size:11px;';
+      btnPrev.textContent = '◀ Prev';
+      btnPrev.disabled = currentPdfPageIdx === 0;
+      if (btnPrev.disabled) btnPrev.style.opacity = '0.35';
+      btnPrev.onclick = () => switchPdfPage(currentPdfPageIdx - 1);
+      pageNavContainer.appendChild(btnPrev);
+
+      pdfPages.forEach((p, idx) => {
+        const boxCount = (idx === currentPdfPageIdx) ? currentBoxes.length : (p.boxes ? p.boxes.length : 0);
+        const hasMasks = boxCount > 0;
+        const isCurrent = idx === currentPdfPageIdx;
+
+        const pill = document.createElement('button');
+        pill.type = 'button';
+        pill.className = 'aegis-page-pill';
+        pill.dataset.page = p.pageNum;
+        pill.style.cssText = `
+          border: ${isCurrent ? '1.5px solid #9C8DD4' : hasMasks ? '1px solid #A7F3D0' : '1px solid rgba(0,0,0,0.1)'};
+          background: ${isCurrent ? '#212529' : hasMasks ? '#ECFDF5' : '#FFFFFF'};
+          color: ${isCurrent ? '#ffffff' : hasMasks ? '#047857' : '#757575'};
+          padding: 3px 8px;
+          border-radius: 8px;
+          font-size: 11px;
+          font-family: monospace;
+          font-weight: 700;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          transition: all 0.15s ease;
+        `;
+        pill.title = `Page ${p.pageNum} (${hasMasks ? `${boxCount} sensitive areas masked` : 'Clean page'})`;
+        pill.innerHTML = `<span>Page ${p.pageNum}</span>${hasMasks ? `<span style="background:${isCurrent ? '#9C8DD4' : '#047857'}; color:#fff; padding:1px 5px; border-radius:9999px; font-size:9px;">🔒 ${boxCount}</span>` : '<span style="font-size:9px; color:#9ca3af;">✓</span>'}`;
+        pill.onclick = () => switchPdfPage(idx);
+        pageNavContainer.appendChild(pill);
+      });
+
+      const btnNext = document.createElement('button');
+      btnNext.type = 'button';
+      btnNext.style.cssText = 'background:#212529; color:#fff; border:none; border-radius:6px; padding:3px 8px; font-weight:bold; cursor:pointer; font-size:11px;';
+      btnNext.textContent = 'Next ▶';
+      btnNext.disabled = currentPdfPageIdx === pdfPages.length - 1;
+      if (btnNext.disabled) btnNext.style.opacity = '0.35';
+      btnNext.onclick = () => switchPdfPage(currentPdfPageIdx + 1);
+      pageNavContainer.appendChild(btnNext);
     }
 
     // Helper: generate document page preview canvas for plain text documents
@@ -1553,53 +1862,73 @@
             }).promise;
 
             const textContent = await page.getTextContent();
-            const pageText = textContent.items
-              .filter(i => 'str' in i)
-              .map(i => i.str)
-              .join(' ');
+            const rawItems = (textContent.items || []).filter(i => i && typeof i.str === 'string');
+            const pageText = rawItems.map(i => i.str).join(' ');
 
             const piiItems = scanText(pageText);
             const pageBoxes = [];
 
+            // Multi-chunk union bounding box mapping
             piiItems.forEach(finding => {
-              let matched = false;
-              if (finding.value) {
-                const cleanVal = finding.value.replace(/[-\s]/g, '');
-                for (const item of textContent.items) {
-                  if (!item.str) continue;
-                  const cleanItem = item.str.replace(/[-\s]/g, '');
-                  if (
-                    item.str.includes(finding.value) ||
-                    finding.value.includes(item.str) ||
-                    (cleanItem.length >= 4 && cleanVal.includes(cleanItem))
-                  ) {
-                    const tx = item.transform[4] * 1.5;
-                    const ty = viewport.height - (item.transform[5] * 1.5);
-                    const tw = Math.max(50, (item.width || 60) * 1.5);
-                    const th = Math.max(18, (item.height || 14) * 1.5);
+              if (!finding.value) return;
+              const findingVal = finding.value.trim();
+              const cleanFinding = findingVal.replace(/[-\s]/g, '').toLowerCase();
 
-                    pageBoxes.push({
-                      x: Math.max(0, Math.round(tx - 4)),
-                      y: Math.max(0, Math.round(ty - th - 4)),
-                      width: Math.round(tw + 8),
-                      height: Math.round(th + 8),
-                      label: finding.label
-                    });
-                    matched = true;
-                    break;
-                  }
+              const matchedChunks = [];
+              for (const item of rawItems) {
+                const itemStr = item.str;
+                const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
+                if (!cleanItem) continue;
+
+                const isExact = itemStr.includes(findingVal) || findingVal.includes(itemStr);
+                const isClean = (cleanItem.length >= 3 && cleanFinding.includes(cleanItem)) ||
+                                (cleanFinding.length >= 3 && cleanItem.includes(cleanFinding));
+
+                if (isExact || isClean) {
+                  matchedChunks.push(item);
                 }
               }
-              if (!matched) {
-                pageBoxes.push({
-                  x: Math.round(pCanvas.width * 0.1),
-                  y: Math.round(pCanvas.height * 0.25 + (pageBoxes.length * 36)),
-                  width: Math.round(pCanvas.width * 0.8),
-                  height: 28,
-                  label: finding.label
+
+              if (matchedChunks.length > 0) {
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                matchedChunks.forEach(item => {
+                  const tx = item.transform[4] * 1.5;
+                  const ty = viewport.height - (item.transform[5] * 1.5);
+                  const tw = Math.max(16, (item.width || 40) * 1.5);
+                  const th = Math.max(14, (item.height || Math.abs(item.transform[0]) || 14) * 1.5);
+
+                  const bx = Math.max(0, Math.round(tx - 4));
+                  const by = Math.max(0, Math.round(ty - th - 3));
+                  const bw = Math.round(tw + 8);
+                  const bh = Math.round(th + 6);
+
+                  minX = Math.min(minX, bx);
+                  minY = Math.min(minY, by);
+                  maxX = Math.max(maxX, bx + bw);
+                  maxY = Math.max(maxY, by + bh);
                 });
+
+                if (minX < Infinity && maxX > minX && maxY > minY) {
+                  pageBoxes.push({
+                    x: minX,
+                    y: minY,
+                    width: Math.min(pCanvas.width - minX, maxX - minX),
+                    height: Math.min(pCanvas.height - minY, maxY - minY),
+                    label: finding.label
+                  });
+                }
               }
             });
+
+            // Also detect face photos or visual ID photo blocks on canvas
+            try {
+              const faceBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name);
+              faceBoxes.forEach(fb => {
+                if (!pageBoxes.some(pb => Math.abs(pb.x - fb.x) < 30 && Math.abs(pb.y - fb.y) < 30)) {
+                  pageBoxes.push(fb);
+                }
+              });
+            } catch (e) {}
 
             pdfPages.push({
               pageNum: pNum,
@@ -1634,18 +1963,10 @@
         // Add Multi-Page Navigation Bar to QuickBar if multi-page PDF
         if (pdfPages.length > 1) {
           pageNavContainer = document.createElement('div');
-          pageNavContainer.style.cssText = 'display:flex; align-items:center; gap:8px; background:#0284c7; padding:4px 10px; border-radius:8px;';
-          pageNavContainer.innerHTML = `
-            <button id="aegis-prev-page" style="background:#0369a1; color:#ffffff; border:none; border-radius:4px; padding:2px 8px; font-weight:bold; cursor:pointer;">◀ Prev</button>
-            <span id="aegis-page-indicator" style="font-size:11px; font-weight:bold; color:#ffffff; font-family:monospace;">Page 1 of ${pdfPages.length}</span>
-            <button id="aegis-next-page" style="background:#0369a1; color:#ffffff; border:none; border-radius:4px; padding:2px 8px; font-weight:bold; cursor:pointer;">Next ▶</button>
-          `;
+          pageNavContainer.style.cssText = 'display:flex; flex-wrap:wrap; align-items:center; gap:6px; background:#FAF9F6; padding:4px 8px; border-radius:10px; border:1px solid rgba(0,0,0,0.08);';
           quickBar.appendChild(pageNavContainer);
 
-          const btnPrev = pageNavContainer.querySelector('#aegis-prev-page');
-          const btnNext = pageNavContainer.querySelector('#aegis-next-page');
-
-          const switchPdfPage = (targetIdx) => {
+          switchPdfPage = (targetIdx) => {
             if (targetIdx < 0 || targetIdx >= pdfPages.length) return;
             pdfPages[currentPdfPageIdx].boxes = [...currentBoxes];
             currentPdfPageIdx = targetIdx;
@@ -1658,8 +1979,7 @@
             updatePageNavUI();
           };
 
-          if (btnPrev) btnPrev.onclick = () => switchPdfPage(currentPdfPageIdx - 1);
-          if (btnNext) btnNext.onclick = () => switchPdfPage(currentPdfPageIdx + 1);
+          updatePageNavUI();
         }
       } else {
         // Fallback for PDF if PDF.js was unable to parse
@@ -1834,6 +2154,10 @@
         ctx.setLineDash([4, 4]);
         ctx.strokeRect(dragAnchor.x, dragAnchor.y, dragAnchor.width, dragAnchor.height);
         ctx.setLineDash([]);
+      }
+
+      if (!isExport && pdfPages.length > 1) {
+        updatePageNavUI();
       }
     }
 
