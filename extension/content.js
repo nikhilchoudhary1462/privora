@@ -9,6 +9,55 @@
   'use strict';
 
   // -------------------------------------------------------------
+  // Self-Site Immunity: Do NOT run on Privora's own web application
+  // -------------------------------------------------------------
+  function isOwnPrivoraApp() {
+    try {
+      // 1. Direct DOM attributes / meta / globals
+      if (document.documentElement && (
+        document.documentElement.getAttribute('data-privora-app') === 'true' ||
+        document.documentElement.hasAttribute('data-privora-app')
+      )) {
+        return true;
+      }
+      if (typeof window !== 'undefined' && (
+        window.__IS_PRIVORA_APP__ === true ||
+        window.__PRIVORA_CORE__ !== undefined ||
+        window.__privoraIsNativeApp === true
+      )) {
+        return true;
+      }
+      if (document.querySelector && (
+        document.querySelector('meta[name="privora-app"]') ||
+        document.querySelector('#root[data-privora-app="true"]')
+      )) {
+        return true;
+      }
+
+      // 2. Hostname & Port check (Vite dev server, preview, or local Privora servers)
+      const host = window.location.hostname;
+      const port = window.location.port;
+      if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') {
+        if (['5173', '4173', '3000', '8080', '5174', '5175'].includes(port)) {
+          if (port === '5173' || port === '4173') return true;
+          if (document.title && document.title.toLowerCase().includes('privora')) return true;
+        }
+      }
+
+      // 3. Document Title check
+      if (document.title && document.title.toLowerCase().includes('privora') && (host === 'localhost' || host === '127.0.0.1' || host.includes('privora'))) {
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  if (isOwnPrivoraApp()) {
+    console.log('[Privora Extension] Native Privora Web Application detected. Bypassing all extension listeners and UI.');
+    return;
+  }
+
+  // -------------------------------------------------------------
   // Master Privacy Shield State (Synchronized via Chrome Storage)
   // -------------------------------------------------------------
   let isShieldEnabled = true;

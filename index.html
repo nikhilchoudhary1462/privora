@@ -1,13 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-privora-app="true">
   <head>
     <meta charset="UTF-8" />
+    <meta name="privora-app" content="true" />
     <link rel="icon" type="image/svg+xml" href="/shield.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Privora — On-Device Privacy & Cryptographic Redaction Engine</title>
+    <script>
+      window.__IS_PRIVORA_APP__ = true;
+      window.__privoraIsNativeApp = true;
+    </script>
   </head>
   <body class="bg-[#F1F3F5] text-[#212529] min-h-screen antialiased selection:bg-[#9C8DD4] selection:text-white font-sans overflow-x-hidden">
-    <div id="root"></div>
+    <div id="root" data-privora-app="true"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
