@@ -82,7 +82,11 @@ if (chrome.downloads && chrome.downloads.onChanged) {
           const item = items[0];
           const fileName = item.filename ? item.filename.split(/[\/\\]/).pop() : '';
 
-          chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+          chrome.storage.local.get(['privora_shield_enabled', 'aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+            if (res.privora_shield_enabled === false) {
+              console.log('[Privora] Shield is OFF; skipping download retrace check.');
+              return;
+            }
             const manifests = [...(res.aegis_active_manifests || []), ...(res.aegis_encrypted_manifests || [])];
             const matched = manifests.find(m => {
               const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();

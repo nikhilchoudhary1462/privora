@@ -9,6 +9,37 @@
   'use strict';
 
   // -------------------------------------------------------------
+  // Master Privacy Shield State (Synchronized via Chrome Storage)
+  // -------------------------------------------------------------
+  let isShieldEnabled = true;
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(['privora_shield_enabled'], (res) => {
+      if (typeof res.privora_shield_enabled === 'boolean') {
+        isShieldEnabled = res.privora_shield_enabled;
+      }
+    });
+
+    if (chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes.privora_shield_enabled) {
+          isShieldEnabled = changes.privora_shield_enabled.newValue !== false;
+          console.log('[Privora Shield] Active status:', isShieldEnabled ? 'ON' : 'OFF');
+        }
+      });
+    }
+  }
+
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg && msg.type === 'PRIVORA_SHIELD_TOGGLED') {
+        isShieldEnabled = msg.enabled !== false;
+        console.log('[Privora Shield] Toggle received:', isShieldEnabled ? 'ON' : 'OFF');
+      }
+    });
+  }
+
+  // -------------------------------------------------------------
   // 1. Deterministic PII Detection Algorithms
   // -------------------------------------------------------------
   const verhoeffTableD = [
@@ -416,6 +447,154 @@
   }
 
   // -------------------------------------------------------------
+  // 3b. Floating Lower-Right Encrypted Image Preview Card
+  // (Displays encrypted image preview non-intrusively in the lower right,
+  //  without blocking the page, with a direct 'Edit Full Screen' option)
+  // -------------------------------------------------------------
+  let activePreviewCard = null;
+
+  function showEncryptedImagePreviewCard({
+    file,
+    maskedBlob,
+    maskedDataUrl,
+    detectedBoxes = [],
+    onOpenFullScreen,
+    onAllowPlaintext,
+  }) {
+    if (activePreviewCard) {
+      activePreviewCard.remove();
+      activePreviewCard = null;
+    }
+    if (activeHud) {
+      clearTimeout(hudTimer);
+      activeHud.remove();
+      activeHud = null;
+    }
+
+    const card = document.createElement('div');
+    card.id = 'privora-encrypted-preview-card';
+    card.style.cssText = `
+      position: fixed !important;
+      bottom: 24px !important;
+      right: 24px !important;
+      width: 320px !important;
+      max-width: calc(100vw - 48px) !important;
+      background: #FAF9F6 !important;
+      color: #212529 !important;
+      border: 1px solid rgba(0, 0, 0, 0.08) !important;
+      border-radius: 18px !important;
+      padding: 14px 16px !important;
+      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(156, 141, 212, 0.25) !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif !important;
+      z-index: 2147483647 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 10px !important;
+      animation: aegisFadeIn 0.25s ease-out !important;
+      line-height: 1.4 !important;
+      box-sizing: border-box !important;
+    `;
+
+    const boxCount = detectedBoxes ? detectedBoxes.length : 0;
+    const sizeKb = (file.size / 1024).toFixed(1);
+    const siteName = window.location.hostname || 'destination site';
+
+    card.innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div style="width:26px; height:26px; border-radius:8px; background:#9C8DD4; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; box-shadow:0 2px 6px rgba(156,141,212,0.35);">P</div>
+          <div>
+            <div style="font-size:12px; font-weight:800; color:#212529; letter-spacing:-0.01em;">
+              Privora Shield<span style="color:#E77A73;">.</span>
+            </div>
+            <div style="font-size:10px; color:#757575;">Encrypted on-device</div>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="font-size:9px; background:#ECFDF5; color:#047857; border:1px solid #A7F3D0; padding:2px 7px; border-radius:9999px; font-family:monospace; font-weight:700;">
+            PROTECTED ✓
+          </span>
+          <button id="privora-preview-close" style="background:transparent; border:none; color:#9ca3af; font-size:14px; cursor:pointer; padding:2px 4px; line-height:1;" title="Dismiss Preview">✕</button>
+        </div>
+      </div>
+
+      <!-- Small Encrypted Image Preview Thumbnail -->
+      <div style="position:relative; width:100%; height:136px; background:#0f172a; border-radius:10px; overflow:hidden; border:1px solid rgba(0,0,0,0.08); display:flex; align-items:center; justify-content:center;">
+        <img src="${maskedDataUrl}" alt="Encrypted Preview" style="width:100%; height:100%; object-fit:contain; display:block;" />
+        <div style="position:absolute; bottom:6px; left:6px; background:rgba(15,23,42,0.85); backdrop-filter:blur(4px); color:#f8fafc; font-size:9px; font-weight:700; padding:2px 6px; border-radius:6px; border:1px solid rgba(255,255,255,0.15); display:flex; align-items:center; gap:4px;">
+          <span>🔒</span>
+          <span>${boxCount > 0 ? `${boxCount} Sensitive Area${boxCount > 1 ? 's' : ''} Masked` : 'Encrypted with AES-256'}</span>
+        </div>
+      </div>
+
+      <!-- File metadata -->
+      <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
+        <span style="color:#212529; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px;" title="${file.name}">📄 ${file.name}</span>
+        <span style="color:#757575; font-family:monospace; font-size:10px;">${sizeKb} KB</span>
+      </div>
+      <p style="margin:0; font-size:10px; color:#757575; line-height:1.3;">
+        Masked on-device before sending to <strong>${siteName}</strong>. Zero plaintext leaked.
+      </p>
+
+      <!-- Action buttons -->
+      <div style="display:flex; flex-direction:column; gap:6px; margin-top:2px;">
+        <div style="display:flex; gap:6px;">
+          <button id="privora-btn-fullscreen" style="flex:1; background:#212529; color:#ffffff; border:none; border-radius:10px; padding:8px 10px; font-size:11px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px; box-shadow:0 1px 3px rgba(0,0,0,0.12); transition:background 0.15s ease;">
+            <span>⛶</span>
+            <span>Edit Full Screen</span>
+          </button>
+          <button id="privora-btn-keep" style="background:#A99DD8; color:#ffffff; border:none; border-radius:10px; padding:8px 12px; font-size:11px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:4px; box-shadow:0 1px 3px rgba(0,0,0,0.12); transition:background 0.15s ease;">
+            <span>✓</span>
+            <span>Done</span>
+          </button>
+        </div>
+        ${onAllowPlaintext ? `
+          <button id="privora-btn-plaintext" style="background:transparent; border:none; color:#757575; font-size:10px; text-decoration:underline; cursor:pointer; padding:2px; text-align:center;">
+            Upload Original Plaintext (Unmasked)
+          </button>
+        ` : ''}
+      </div>
+    `;
+
+    document.documentElement.appendChild(card);
+    activePreviewCard = card;
+
+    const btnClose = card.querySelector('#privora-preview-close');
+    if (btnClose) {
+      btnClose.onclick = () => {
+        card.remove();
+        activePreviewCard = null;
+      };
+    }
+
+    const btnKeep = card.querySelector('#privora-btn-keep');
+    if (btnKeep) {
+      btnKeep.onclick = () => {
+        card.remove();
+        activePreviewCard = null;
+      };
+    }
+
+    const btnFullScreen = card.querySelector('#privora-btn-fullscreen');
+    if (btnFullScreen) {
+      btnFullScreen.onclick = () => {
+        card.remove();
+        activePreviewCard = null;
+        if (onOpenFullScreen) onOpenFullScreen();
+      };
+    }
+
+    const btnPlaintext = card.querySelector('#privora-btn-plaintext');
+    if (btnPlaintext) {
+      btnPlaintext.onclick = () => {
+        card.remove();
+        activePreviewCard = null;
+        if (onAllowPlaintext) onAllowPlaintext();
+      };
+    }
+  }
+
+  // -------------------------------------------------------------
   // Automatic Sensitive Region & Face Detection Engine
   // -------------------------------------------------------------
   window._privoraRecentManifests = window._privoraRecentManifests || [];
@@ -679,7 +858,8 @@
     }
   }
 
-  async function autoProtectAndSanitizeFile(file, { onOpenEditor } = {}) {
+  async function autoProtectAndSanitizeFile(file, options = {}) {
+    const { onOpenEditor, onAllowPlaintext } = options;
     const fn = file.name.toLowerCase();
     const isImage = file.type.startsWith('image/') || fn.match(/\.(png|jpe?g|webp|svg|bmp|gif)$/i);
     const isPdf = file.type === 'application/pdf' || fn.endsWith('.pdf');
@@ -803,14 +983,16 @@
               saveManifest(manifest);
 
               const sanitizedFile = new File([maskedBlob], file.name, { type: mimeType });
+              const maskedDataUrl = canvas.toDataURL(mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png', mimeType === 'image/jpeg' ? estimatedQuality : 0.85);
 
-              showPrivoraHud({
-                type: 'encrypted',
-                title: 'Privora Shield · Protected',
-                subtitle: `Encrypted before sending to ${window.location.hostname || 'site'}. Zero plaintext leaked to cloud ✓`,
-                durationMs: 3500,
-                actionLabel: onOpenEditor ? 'Inspect' : null,
-                onAction: onOpenEditor
+              // Present small non-intrusive preview in the lower-right corner
+              showEncryptedImagePreviewCard({
+                file,
+                maskedBlob,
+                maskedDataUrl,
+                detectedBoxes,
+                onOpenFullScreen: onOpenEditor,
+                onAllowPlaintext,
               });
 
               resolve(sanitizedFile);
@@ -929,17 +1111,17 @@
       right: 24px !important;
       left: auto !important;
       top: auto !important;
-      width: 380px !important;
+      width: 360px !important;
       max-width: calc(100vw - 48px) !important;
       height: auto !important;
       z-index: 2147483647 !important;
-      background: #090d16 !important;
-      border: 1px solid #06b6d4 !important;
+      background: #FAF9F6 !important;
+      border: 1px solid rgba(0, 0, 0, 0.08) !important;
       border-radius: 16px !important;
-      padding: 16px 20px !important;
-      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.9), 0 0 30px rgba(6, 182, 212, 0.3) !important;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-      color: #f8fafc !important;
+      padding: 16px 18px !important;
+      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(156, 141, 212, 0.25) !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif !important;
+      color: #212529 !important;
       animation: aegisFadeIn 0.25s ease-out !important;
       display: flex !important;
       flex-direction: column !important;
@@ -951,31 +1133,31 @@
     promptCard.innerHTML = `
       <div style="display:flex; align-items:center; justify-content:space-between;">
         <div style="display:flex; align-items:center; gap:10px;">
-          <div style="background:#082f49; border:1px solid #0284c7; width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:17px;">🛡️</div>
+          <div style="background:#9C8DD4; color:#ffffff; width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:800; box-shadow:0 2px 6px rgba(156,141,212,0.35);">P</div>
           <div>
             <div style="display:flex; align-items:center; gap:6px;">
-              <strong style="font-size:13px; color:#f8fafc;">Privora Privacy Shield</strong>
-              <span style="font-size:9px; background:#082f49; color:#38bdf8; border:1px solid #0369a1; padding:1px 6px; border-radius:9999px; font-family:monospace;">READY</span>
+              <strong style="font-size:13px; color:#212529;">Privora Shield<span style="color:#E77A73;">.</span></strong>
+              <span style="font-size:9px; background:#ECFDF5; color:#047857; border:1px solid #A7F3D0; padding:1px 6px; border-radius:9999px; font-family:monospace; font-weight:700;">INTERCEPTED</span>
             </div>
-            <p style="margin:2px 0 0; font-size:11px; color:#94a3b8;">
-              File Upload Intercepted on <strong style="color:#38bdf8;">${window.location.hostname || 'site'}</strong>
+            <p style="margin:2px 0 0; font-size:11px; color:#757575;">
+              File Upload Intercepted on <strong style="color:#212529;">${window.location.hostname || 'site'}</strong>
             </p>
           </div>
         </div>
-        <button id="btn-prompt-close" style="background:transparent; border:none; color:#64748b; font-size:16px; cursor:pointer; padding:4px;" title="Cancel Upload">✕</button>
+        <button id="btn-prompt-close" style="background:transparent; border:none; color:#9ca3af; font-size:16px; cursor:pointer; padding:4px;" title="Cancel Upload">✕</button>
       </div>
 
-      <div style="background:#0f172a; border:1px solid #1e293b; border-radius:10px; padding:8px 12px; display:flex; align-items:center; justify-content:space-between; font-size:11px;">
-        <span style="color:#cbd5e1; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:260px;">📄 ${file.name}</span>
-        <span style="color:#64748b; font-family:monospace;">${(file.size / 1024).toFixed(1)} KB</span>
+      <div style="background:#FFFFFF; border:1px solid rgba(0, 0, 0, 0.06); border-radius:10px; padding:8px 12px; display:flex; align-items:center; justify-content:space-between; font-size:11px;">
+        <span style="color:#212529; font-weight:600; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px;">📄 ${file.name}</span>
+        <span style="color:#757575; font-family:monospace;">${(file.size / 1024).toFixed(1)} KB</span>
       </div>
 
       <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
-        <button id="btn-prompt-edit" style="flex:1; background:linear-gradient(135deg, #0284c7, #0891b2); color:#fff; border:none; border-radius:10px; padding:8px 12px; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px; box-shadow:0 4px 12px rgba(2, 132, 199, 0.3);">
+        <button id="btn-prompt-edit" style="flex:1; background:#212529; color:#fff; border:none; border-radius:10px; padding:9px 12px; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px; box-shadow:0 2px 4px rgba(0,0,0,0.1);">
           <span>🎨</span>
           <span>Review & Redact</span>
         </button>
-        <button id="btn-prompt-plaintext" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:10px; padding:8px 12px; font-size:11px; font-weight:600; cursor:pointer;" title="Upload original file without masking">
+        <button id="btn-prompt-plaintext" style="background:#FFFFFF; color:#212529; border:1px solid rgba(0,0,0,0.12); border-radius:10px; padding:9px 12px; font-size:11px; font-weight:600; cursor:pointer;" title="Upload original file without masking">
           Upload Plaintext
         </button>
       </div>
@@ -1097,21 +1279,21 @@
     overlay.style.cssText = `
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(4, 7, 18, 0.88);
+      background: rgba(15, 23, 42, 0.75);
       backdrop-filter: blur(10px);
       z-index: 2147483647;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 16px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+      color: #212529;
     `;
 
     const card = document.createElement('div');
     card.style.cssText = `
-      background: #090d16;
-      border: 1px solid #06b6d4;
+      background: #FAF9F6;
+      border: 1px solid rgba(0, 0, 0, 0.08);
       border-radius: 20px;
       padding: 22px;
       max-width: 860px;
@@ -1120,48 +1302,48 @@
       display: flex;
       flex-direction: column;
       gap: 14px;
-      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.9), 0 0 40px rgba(6, 182, 212, 0.25);
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(156, 141, 212, 0.2);
       overflow-y: auto;
     `;
 
     // 1. Header
     const headerRow = document.createElement('div');
-    headerRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #1e293b; padding-bottom:12px;';
+    headerRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(0,0,0,0.06); padding-bottom:12px;';
     headerRow.innerHTML = `
       <div style="display:flex; align-items:center; gap:12px;">
-        <div style="background:#082f49; border:1px solid #0284c7; width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px;">🛡️</div>
+        <div style="background:#9C8DD4; color:#ffffff; width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:800; box-shadow:0 2px 6px rgba(156,141,212,0.35);">P</div>
         <div>
-          <h3 style="margin:0; font-size:16px; font-weight:800; color:#f8fafc; display:flex; align-items:center; gap:8px;">
-            <span>Privora Privacy Interception</span>
-            <span style="font-size:10px; background:#082f49; color:#38bdf8; border:1px solid #0369a1; padding:2px 8px; border-radius:9999px; font-family:monospace;">ACTIVE SHIELD</span>
+          <h3 style="margin:0; font-size:16px; font-weight:800; color:#212529; display:flex; align-items:center; gap:8px;">
+            <span>Privora Privacy Studio</span>
+            <span style="font-size:10px; background:#ECFDF5; color:#047857; border:1px solid #A7F3D0; padding:2px 8px; border-radius:9999px; font-family:monospace; font-weight:700;">ON-DEVICE MASK</span>
           </h3>
-          <p style="margin:2px 0 0; font-size:11px; color:#94a3b8;">
-            Blocked sensitive file before upload to <strong style="color:#38bdf8;">${window.location.hostname || 'this website'}</strong>
+          <p style="margin:2px 0 0; font-size:11px; color:#757575;">
+            Configure sensitive redaction boxes before uploading to <strong style="color:#212529;">${window.location.hostname || 'this website'}</strong>
           </p>
         </div>
       </div>
       <div style="text-align:right;">
-        <span style="font-size:10px; color:#64748b; font-family:monospace; display:block;">FILE TO UPLOAD</span>
-        <span style="font-size:12px; font-weight:bold; color:#e2e8f0; font-family:monospace;">${file.name} (${(file.size / 1024).toFixed(1)} KB)</span>
+        <span style="font-size:10px; color:#757575; font-family:monospace; display:block;">TARGET DOCUMENT</span>
+        <span style="font-size:12px; font-weight:bold; color:#212529; font-family:monospace;">${file.name} (${(file.size / 1024).toFixed(1)} KB)</span>
       </div>
     `;
     card.appendChild(headerRow);
 
     // 2. Quick Preset Add & Clear Controls
     const quickBar = document.createElement('div');
-    quickBar.style.cssText = 'display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; background:#0b1120; padding:8px 12px; border-radius:12px; border:1px solid #1e293b;';
+    quickBar.style.cssText = 'display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; background:#FFFFFF; padding:8px 12px; border-radius:12px; border:1px solid rgba(0,0,0,0.06);';
     quickBar.innerHTML = `
       <div style="display:flex; align-items:center; gap:6px;">
-        <span style="font-size:11px; color:#94a3b8; font-weight:600; margin-right:4px;">Quick Presets:</span>
-        <button id="add-face-btn" style="background:#1e293b; color:#38bdf8; border:1px solid #0369a1; border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">+ Face Photo</button>
-        <button id="add-name-btn" style="background:#1e293b; color:#38bdf8; border:1px solid #0369a1; border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">+ Name / Demographic</button>
-        <button id="add-id-btn" style="background:#1e293b; color:#38bdf8; border:1px solid #0369a1; border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">+ ID Number</button>
-        <button id="add-qr-btn" style="background:#1e293b; color:#38bdf8; border:1px solid #0369a1; border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">+ QR Matrix</button>
+        <span style="font-size:11px; color:#757575; font-weight:600; margin-right:4px;">Quick Presets:</span>
+        <button id="add-face-btn" style="background:#FAF9F6; color:#212529; border:1px solid rgba(0,0,0,0.1); border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">+ Face Photo</button>
+        <button id="add-name-btn" style="background:#FAF9F6; color:#212529; border:1px solid rgba(0,0,0,0.1); border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">+ Name / Demographic</button>
+        <button id="add-id-btn" style="background:#FAF9F6; color:#212529; border:1px solid rgba(0,0,0,0.1); border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">+ ID Number</button>
+        <button id="add-qr-btn" style="background:#FAF9F6; color:#212529; border:1px solid rgba(0,0,0,0.1); border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">+ QR Matrix</button>
       </div>
       <div style="display:flex; align-items:center; gap:6px;">
-        <button id="scale-up-btn" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:3px 8px; font-size:11px; font-weight:bold; cursor:pointer;" title="Expand selected box (+15%)">[ +15% ]</button>
-        <button id="scale-down-btn" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:3px 8px; font-size:11px; font-weight:bold; cursor:pointer;" title="Shrink selected box (-15%)">[ -15% ]</button>
-        <button id="clear-boxes-btn" style="background:#331016; color:#f87171; border:1px solid #991b1b; border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">🗑️ Clear All</button>
+        <button id="scale-up-btn" style="background:#FAF9F6; color:#212529; border:1px solid rgba(0,0,0,0.1); border-radius:6px; padding:3px 8px; font-size:11px; font-weight:bold; cursor:pointer;" title="Expand selected box (+15%)">[ +15% ]</button>
+        <button id="scale-down-btn" style="background:#FAF9F6; color:#212529; border:1px solid rgba(0,0,0,0.1); border-radius:6px; padding:3px 8px; font-size:11px; font-weight:bold; cursor:pointer;" title="Shrink selected box (-15%)">[ -15% ]</button>
+        <button id="clear-boxes-btn" style="background:#FEE2E2; color:#DC2626; border:1px solid #FCA5A5; border-radius:8px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;">🗑️ Clear All</button>
       </div>
     `;
     card.appendChild(quickBar);
@@ -1978,49 +2160,52 @@
     const btnConfirmMask = document.createElement('button');
     btnConfirmMask.style.cssText = `
       flex: 2;
-      background: linear-gradient(135deg, #06b6d4, #10b981);
-      color: #020617;
+      background: #212529;
+      color: #ffffff;
       border: none;
       border-radius: 12px;
-      padding: 12px;
-      font-weight: 800;
+      padding: 12px 16px;
+      font-weight: 700;
       font-size: 13px;
       cursor: pointer;
-      box-shadow: 0 4px 14px rgba(6, 182, 212, 0.4);
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
+      gap: 8px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+      transition: background 0.15s ease;
     `;
-    btnConfirmMask.innerHTML = '<span>🔒</span> Redact / Encrypt & Proceed with Upload';
+    btnConfirmMask.innerHTML = '<span>🔒</span> Apply & Upload Encrypted Document';
 
     const btnAllowPlaintext = document.createElement('button');
     btnAllowPlaintext.style.cssText = `
       flex: 1;
-      background: #1e293b;
-      color: #fbbf24;
-      border: 1px solid #78350f;
+      background: #FFFFFF;
+      color: #B45309;
+      border: 1px solid #FDE68A;
       border-radius: 12px;
       padding: 12px;
-      font-weight: bold;
+      font-weight: 700;
       font-size: 12px;
       cursor: pointer;
+      transition: all 0.15s ease;
     `;
-    btnAllowPlaintext.textContent = '⚠️ Upload Unmodified';
+    btnAllowPlaintext.textContent = '⚠️ Upload Plaintext';
 
     const btnCancel = document.createElement('button');
     btnCancel.style.cssText = `
       flex: 1;
-      background: #1e293b;
-      color: #94a3b8;
-      border: 1px solid #334155;
+      background: #FFFFFF;
+      color: #64748B;
+      border: 1px solid rgba(0, 0, 0, 0.1);
       border-radius: 12px;
       padding: 12px;
-      font-weight: bold;
+      font-weight: 700;
       font-size: 12px;
       cursor: pointer;
+      transition: all 0.15s ease;
     `;
-    btnCancel.textContent = '❌ Cancel Upload';
+    btnCancel.textContent = '❌ Cancel';
 
     actionRow.appendChild(btnConfirmMask);
     actionRow.appendChild(btnAllowPlaintext);
@@ -2250,6 +2435,7 @@
   // 5. File Input Change Interception (Seamless Auto-Shield)
   // -------------------------------------------------------------
   document.addEventListener('change', async (e) => {
+    if (!isShieldEnabled) return;
     const target = e.target;
     if (!target || target.tagName !== 'INPUT' || target.type !== 'file') return;
     if (!target.files || target.files.length === 0) return;
@@ -2270,6 +2456,10 @@
 
       try {
         const sanitizedFile = await autoProtectAndSanitizeFile(file, {
+          onAllowPlaintext: () => {
+            target.dataset.aegisSanitized = 'true';
+            target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+          },
           onOpenEditor: () => {
             showFileInterceptionModal({
               file,
@@ -2317,6 +2507,7 @@
   // 6. File Drop Interception (Seamless Auto-Shield)
   // -------------------------------------------------------------
   document.addEventListener('drop', async (e) => {
+    if (!isShieldEnabled) return;
     if (!e.dataTransfer || !e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
     if (e.defaultPrevented) return;
 
@@ -2697,6 +2888,7 @@
     } catch (err) {}
 
     // IF THIS SITE HAS NO ENCRYPTED MANIFESTS AND NO ENCRYPTION SESSION, NEVER INTERCEPT!
+    if (!isShieldEnabled) return;
     if (!hasHostManifest && !hasSession) {
       return;
     }
@@ -2740,6 +2932,10 @@
     const origClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {
       if (this.dataset.aegisRestored === 'true') {
+        return origClick.apply(this, arguments);
+      }
+
+      if (!isShieldEnabled) {
         return origClick.apply(this, arguments);
       }
 
@@ -2821,17 +3017,17 @@
       right: 24px !important;
       left: auto !important;
       top: auto !important;
-      width: 380px !important;
+      width: 360px !important;
       max-width: calc(100vw - 48px) !important;
       height: auto !important;
       z-index: 2147483647 !important;
-      background: #090d16 !important;
-      border: 1px solid #06b6d4 !important;
+      background: #FAF9F6 !important;
+      border: 1px solid rgba(0, 0, 0, 0.08) !important;
       border-radius: 16px !important;
-      padding: 16px 20px !important;
-      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.9), 0 0 30px rgba(6, 182, 212, 0.3) !important;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-      color: #f8fafc !important;
+      padding: 16px 18px !important;
+      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(156, 141, 212, 0.25) !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif !important;
+      color: #212529 !important;
       animation: aegisFadeIn 0.25s ease-out !important;
       display: flex !important;
       flex-direction: column !important;
@@ -2843,29 +3039,29 @@
     promptCard.innerHTML = `
       <div style="display:flex; align-items:center; justify-content:space-between;">
         <div style="display:flex; align-items:center; gap:10px;">
-          <div style="background:#082f49; border:1px solid #0284c7; width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:17px;">🛡️</div>
+          <div style="background:#9C8DD4; color:#ffffff; width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:800; box-shadow:0 2px 6px rgba(156,141,212,0.35);">P</div>
           <div>
             <div style="display:flex; align-items:center; gap:6px;">
-              <strong style="font-size:13px; color:#f8fafc;">Sensitive PII in Clipboard</strong>
-              <span style="font-size:9px; background:#451a03; color:#fcd34d; border:1px solid #78350f; padding:1px 6px; border-radius:9999px; font-family:monospace;">${piiCount} ITEM${piiCount > 1 ? 'S' : ''}</span>
+              <strong style="font-size:13px; color:#212529;">Clipboard PII Shield<span style="color:#E77A73;">.</span></strong>
+              <span style="font-size:9px; background:#FEE2E2; color:#DC2626; border:1px solid #FCA5A5; padding:1px 6px; border-radius:9999px; font-family:monospace; font-weight:700;">${piiCount} ITEM${piiCount > 1 ? 'S' : ''}</span>
             </div>
-            <p style="margin:2px 0 0; font-size:11px; color:#94a3b8;">
-              Found: <strong style="color:#38bdf8;">${piiLabels.join(', ')}</strong>
+            <p style="margin:2px 0 0; font-size:11px; color:#757575;">
+              Found: <strong style="color:#212529;">${piiLabels.join(', ')}</strong>
             </p>
           </div>
         </div>
-        <button id="btn-text-prompt-close" style="background:transparent; border:none; color:#64748b; font-size:16px; cursor:pointer; padding:4px;" title="Cancel Paste">✕</button>
+        <button id="btn-text-prompt-close" style="background:transparent; border:none; color:#9ca3af; font-size:16px; cursor:pointer; padding:4px;" title="Cancel Paste">✕</button>
       </div>
 
       <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
-        <button id="btn-text-prompt-redact" style="flex:1; background:linear-gradient(135deg, #0284c7, #0891b2); color:#fff; border:none; border-radius:10px; padding:8px 10px; font-size:11px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px;">
+        <button id="btn-text-prompt-redact" style="flex:1; background:#212529; color:#fff; border:none; border-radius:10px; padding:9px 12px; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px; box-shadow:0 2px 4px rgba(0,0,0,0.1);">
           <span>🔒</span>
           <span>Redact & Paste</span>
         </button>
-        <button id="btn-text-prompt-editor" style="background:#1e293b; color:#38bdf8; border:1px solid #0369a1; border-radius:10px; padding:8px 10px; font-size:11px; font-weight:600; cursor:pointer;" title="Open full review dialog">
+        <button id="btn-text-prompt-editor" style="background:#FAF9F6; color:#212529; border:1px solid rgba(0,0,0,0.12); border-radius:10px; padding:9px 12px; font-size:11px; font-weight:600; cursor:pointer;" title="Open full review dialog">
           Review...
         </button>
-        <button id="btn-text-prompt-allow" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:10px; padding:8px 10px; font-size:11px; font-weight:600; cursor:pointer;" title="Paste raw text without changes">
+        <button id="btn-text-prompt-allow" style="background:#FFFFFF; color:#757575; border:1px solid rgba(0,0,0,0.12); border-radius:10px; padding:9px 12px; font-size:11px; font-weight:600; cursor:pointer;" title="Paste raw text without changes">
           Plaintext
         </button>
       </div>
@@ -3104,6 +3300,7 @@
   // 10. Global Paste Event Listener
   // -------------------------------------------------------------
   document.addEventListener('paste', (e) => {
+    if (!isShieldEnabled) return;
     try {
       const text = (e.clipboardData || window.clipboardData)?.getData('text/plain') ||
                    (e.clipboardData || window.clipboardData)?.getData('text') || '';
@@ -3285,6 +3482,10 @@
     }
 
     function handleLiveInput(e) {
+      if (!isShieldEnabled) {
+        removeWarning();
+        return;
+      }
       const target = e.target;
       if (!target) return;
 

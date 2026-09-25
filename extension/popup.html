@@ -1,23 +1,24 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <title>Privora Shield</title>
   <style>
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       width: 320px;
-      margin: 0;
       padding: 16px;
       background: #F1F3F5;
       color: #212529;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+      user-select: none;
     }
     .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
-      padding-bottom: 10px;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
       border-bottom: 1px solid rgba(0, 0, 0, 0.06);
     }
     .brand {
@@ -26,44 +27,123 @@
       gap: 8px;
     }
     .logo-icon {
-      width: 24px;
-      height: 24px;
+      width: 28px;
+      height: 28px;
       border-radius: 8px;
-      background: rgba(156, 141, 212, 0.2);
-      border: 1px solid rgba(156, 141, 212, 0.4);
+      background: #9C8DD4;
+      color: #ffffff;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 13px;
+      font-weight: 800;
+      font-size: 14px;
+      box-shadow: 0 2px 6px rgba(156, 141, 212, 0.35);
     }
     .brand-title {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 800;
       color: #212529;
       letter-spacing: -0.01em;
     }
+    .brand-dot {
+      color: #E77A73;
+    }
     .badge {
       font-size: 9px;
-      padding: 2px 8px;
+      padding: 3px 8px;
       border-radius: 9999px;
+      font-family: monospace;
+      font-weight: 700;
+      transition: all 0.2s ease;
+    }
+    .badge-active {
       background: #ECFDF5;
       color: #047857;
       border: 1px solid #A7F3D0;
-      font-family: monospace;
-      font-weight: 700;
     }
+    .badge-off {
+      background: #F1F5F9;
+      color: #64748B;
+      border: 1px solid #CBD5E1;
+    }
+
+    /* Master Toggle Switch */
+    .toggle-section {
+      background: #FFFFFF;
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+    .toggle-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .toggle-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: #212529;
+    }
+    .toggle-sub {
+      font-size: 10px;
+      color: #757575;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #CBD5E1;
+      transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 24px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    }
+    input:checked + .slider {
+      background-color: #10B981;
+    }
+    input:checked + .slider:before {
+      transform: translateX(20px);
+    }
+
     .status-card {
       background: #FAF9F6;
       border: 1px solid rgba(0, 0, 0, 0.06);
       border-radius: 14px;
       padding: 12px;
       margin-bottom: 12px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
     }
     .status-title {
       font-size: 10px;
       color: #757575;
-      font-weight: 600;
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
@@ -75,15 +155,30 @@
       display: flex;
       align-items: center;
       gap: 6px;
+      transition: color 0.2s ease;
+    }
+    .status-active.is-off {
+      color: #64748B;
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #16A34A;
+      box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.2);
+    }
+    .pulse-dot.is-off {
+      background: #94A3B8;
+      box-shadow: none;
     }
     .features-list {
-      margin-top: 8px;
-      padding-top: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
       border-top: 1px solid rgba(0, 0, 0, 0.05);
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      font-size: 10px;
+      gap: 6px;
+      font-size: 11px;
       color: #757575;
     }
     .feature-row {
@@ -95,64 +190,108 @@
       font-weight: 600;
       color: #212529;
       font-family: monospace;
+      font-size: 10px;
     }
     .btn {
       width: 100%;
-      background: #A99DD8;
+      background: #212529;
       color: #ffffff;
       border: none;
       border-radius: 12px;
-      padding: 9px;
+      padding: 10px;
       font-weight: 700;
       cursor: pointer;
       font-size: 11px;
-      transition: background 0.15s ease;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+      transition: all 0.2s ease;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
     .btn:hover {
-      background: #8A7BC7;
+      background: #000000;
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      margin-top: 8px;
+      width: 100%;
+      background: #FFFFFF;
+      color: #212529;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      border-radius: 12px;
+      padding: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 10px;
+      transition: all 0.15s ease;
+    }
+    .btn-secondary:hover {
+      background: #F1F3F5;
     }
   </style>
 </head>
 <body>
   <div class="header">
     <div class="brand">
-      <div class="logo-icon">🛡️</div>
-      <span class="brand-title">Privora Shield</span>
+      <div class="logo-icon">P</div>
+      <span class="brand-title">Privora<span class="brand-dot">.</span></span>
     </div>
-    <span class="badge">ACTIVE</span>
+    <span id="shield-badge" class="badge badge-active">ACTIVE</span>
+  </div>
+
+  <!-- Master ON/OFF Switch -->
+  <div class="toggle-section">
+    <div class="toggle-info">
+      <span class="toggle-label" id="toggle-state-text">Privacy Shield ON</span>
+      <span class="toggle-sub" id="toggle-state-desc">Real-time uploads & paste protected</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="shield-master-toggle" checked>
+      <span class="slider"></span>
+    </label>
   </div>
 
   <div class="status-card">
     <div class="status-title">Real-Time Protection Status</div>
-    <div class="status-active">
-      <span>●</span>
-      <span>100% On-Device Interceptor</span>
+    <div class="status-active" id="status-line">
+      <span class="pulse-dot" id="status-dot"></span>
+      <span id="status-title-text">100% On-Device Interceptor</span>
     </div>
     <div class="features-list">
-      <div class="feature-row" style="color: #6D5BA8; font-weight: 700;">
+      <div class="feature-row" style="color: #9C8DD4; font-weight: 700;">
         <span>Seamless Auto-Shield</span>
-        <span>Auto Encrypt/Decrypt</span>
+        <span id="feat-autoshield">AES-256-GCM</span>
       </div>
       <div class="feature-row">
-        <span>File Upload Interception</span>
-        <span>Enabled</span>
+        <span>Image Upload Interceptor</span>
+        <span id="feat-upload">Active</span>
+      </div>
+      <div class="feature-row">
+        <span>Lower-Right Preview</span>
+        <span id="feat-preview">Enabled</span>
       </div>
       <div class="feature-row">
         <span>Clipboard PII Shield</span>
-        <span>Enabled</span>
+        <span id="feat-clipboard">Enabled</span>
       </div>
       <div class="feature-row">
         <span>Auto-Retrace on Download</span>
-        <span>Active</span>
+        <span id="feat-retrace">Active</span>
       </div>
       <div class="feature-row">
-        <span>Active Manifests</span>
+        <span>Active Vault Manifests</span>
         <span id="protected-count">0 Files</span>
       </div>
     </div>
   </div>
-  <button class="btn" id="open-app-btn">Open Privora Dashboard</button>
+
+  <button class="btn" id="open-app-btn">
+    <span>🛡️</span>
+    <span>Open Privora Dashboard</span>
+  </button>
+  <button class="btn-secondary" id="open-test-btn">Open Test Tool Page</button>
+
   <script src="popup.js"></script>
 </body>
 </html>
