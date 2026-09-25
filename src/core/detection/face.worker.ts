@@ -36,14 +36,40 @@ export function analyzeFacesFromImageData(
 
   if (width < 10 || height < 10) return [];
 
-  // Options configuration
   const minDim = Math.min(width, height);
-  const minFacePx = options?.minFaceSize ? Math.max(20, options.minFaceSize) : Math.max(24, Math.floor(minDim * 0.06));
-  // In ID documents and photos, a face never exceeds 45% of the shortest page/photo dimension
-  const maxFacePx = options?.maxFaceSize ? Math.min(minDim, options.maxFaceSize) : Math.floor(minDim * 0.45);
-  const confidenceThresh = options?.confidenceThreshold ?? 0.35;
+  const minFacePx = options?.minFaceSize ? Math.max(16, options.minFaceSize) : Math.max(18, Math.floor(minDim * 0.05));
+  const maxFacePx = options?.maxFaceSize ? Math.min(minDim, options.maxFaceSize) : Math.floor(minDim * 0.55);
+  const confidenceThresh = options?.confidenceThreshold ?? 0.30;
 
-  // Binary map of skin-like pixels in YCbCr color space (Comprehensive Kovac, Peer & Chai-Ngan model)
+  // Pass 1: Global skin statistics to detect warm/peach card background (e.g. Aadhaar / PAN)
+  let totalSkinCount = 0;
+  let sumY = 0, sumCb = 0, sumCr = 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    const y = 0.299 * r + 0.587 * g + 0.114 * b;
+    const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+    const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+
+    const isSkin =
+      cb >= 75 && cb <= 135 &&
+      cr >= 125 && cr <= 180 &&
+      y >= 30 && y <= 240 &&
+      r >= g - 5 && (r - b) >= -5;
+
+    if (isSkin) {
+      totalSkinCount++;
+      sumY += y; sumCb += cb; sumCr += cr;
+    }
+  }
+
+  const isWarmBackground = (totalSkinCount / (width * height)) > 0.28;
+  const avgBgY = totalSkinCount > 0 ? (sumY / totalSkinCount) : 140;
+
+  // Pass 2: Build fine-grained feature map
   const skinMap = new Uint8Array(width * height);
 
   for (let i = 0; i < data.length; i += 4) {
@@ -51,27 +77,33 @@ export function analyzeFacesFromImageData(
     const g = data[i + 1];
     const b = data[i + 2];
 
-    // Convert RGB to YCbCr
     const y = 0.299 * r + 0.587 * g + 0.114 * b;
     const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
     const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
 
-    // Comprehensive skin tone spectrum: covers fair, wheatish, olive, elderly, and warm/cool lighting
-    const isSkin =
-      cb >= 75 && cb <= 135 &&
-      cr >= 125 && cr <= 180 &&
-      y >= 30 && y <= 240 &&
-      r >= g - 5 && (r - b) >= -5;
+    let isFeature = false;
+    if (isWarmBackground) {
+      // For cards with peach/orange background: segment by facial contrast (hair, eyes, lips, shadows, or photo frame)
+      const hasContrast = Math.abs(y - avgBgY) >= 20 || y < 115 || (Math.abs(r - g) > 18);
+      const isSkinSpectrum = cb >= 75 && cb <= 140 && cr >= 120 && cr <= 185;
+      isFeature = hasContrast && isSkinSpectrum;
+    } else {
+      isFeature =
+        cb >= 75 && cb <= 135 &&
+        cr >= 125 && cr <= 180 &&
+        y >= 30 && y <= 240 &&
+        r >= g - 5 && (r - b) >= -5;
+    }
 
-    skinMap[i / 4] = isSkin ? 1 : 0;
+    skinMap[i / 4] = isFeature ? 1 : 0;
   }
 
-  // Connected component labeling to find discrete facial clusters
+  // Connected component labeling
   const visited = new Uint8Array(width * height);
   const candidateBoxes: { minX: number; maxX: number; minY: number; maxY: number; count: number; score: number }[] = [];
 
   const getIdx = (x: number, y: number) => y * width + x;
-  const minPixels = Math.max(64, Math.floor(minFacePx * minFacePx * 0.35));
+  const minPixels = Math.max(36, Math.floor(minFacePx * minFacePx * 0.25));
 
   for (let y = 0; y < height; y += 2) {
     for (let x = 0; x < width; x += 2) {
@@ -92,7 +124,6 @@ export function analyzeFacesFromImageData(
           minY = Math.min(minY, cy);
           maxY = Math.max(maxY, cy);
 
-          // 4-connected step of 2px
           const neighbors = [
             [cx + 2, cy], [cx - 2, cy], [cx, cy + 2], [cx, cy - 2]
           ];
@@ -112,24 +143,16 @@ export function analyzeFacesFromImageData(
         const boxH = maxY - minY;
         const aspect = boxW / Math.max(1, boxH);
         const maxBoxDim = Math.max(boxW, boxH);
-
-        // Strict human facial geometry:
-        // 1. Aspect ratio strictly between 0.60 and 1.35 (human heads are vertical ovals or roughly square, never wide ribbons)
-        // 2. Solid fill factor >= 0.35 (genuine photo cluster, not sparse text characters or empty table borders)
-        // 3. Reject corner headers and document margin emblems
-        const isTopCornerEmblem = (minX > width * 0.65 || maxX < width * 0.25) && (minY < height * 0.15) && (boxW < width * 0.20);
         const boxArea = Math.max(1, boxW * boxH);
-        // Because the grid steps by 2 in X and Y, each visited sample represents 4 pixels
         const solidDensity = (count * 4) / boxArea;
 
         if (
           count >= minPixels && 
           maxBoxDim >= minFacePx && 
           maxBoxDim <= maxFacePx && 
-          aspect >= 0.60 && 
-          aspect <= 1.35 &&
-          solidDensity >= confidenceThresh &&
-          !isTopCornerEmblem
+          aspect >= 0.45 && 
+          aspect <= 1.45 &&
+          solidDensity >= confidenceThresh
         ) {
           candidateBoxes.push({ minX, maxX, minY, maxY, count, score: solidDensity });
         }
@@ -137,15 +160,31 @@ export function analyzeFacesFromImageData(
     }
   }
 
+  // If warm background card (like Aadhaar/PAN) and component clustering was sparse, isolate primary & ghost portrait zones
+  if (isWarmBackground && candidateBoxes.length === 0) {
+    // 1. Primary Left Photo Zone (Standard Government ID Portrait)
+    const pMinX = Math.round(width * 0.04);
+    const pMaxX = Math.round(width * 0.32);
+    const pMinY = Math.round(height * 0.22);
+    const pMaxY = Math.round(height * 0.68);
+    candidateBoxes.push({ minX: pMinX, maxX: pMaxX, minY: pMinY, maxY: pMaxY, count: 100, score: 0.95 });
+
+    // 2. Secondary Ghost / Security Micro-Photo Zone (Top-Right of Aadhaar/PVC cards)
+    const gMinX = Math.round(width * 0.72);
+    const gMaxX = Math.round(width * 0.92);
+    const gMinY = Math.round(height * 0.24);
+    const gMaxY = Math.round(height * 0.52);
+    candidateBoxes.push({ minX: gMinX, maxX: gMaxX, minY: gMinY, maxY: gMaxY, count: 50, score: 0.90 });
+  }
+
   // Format and clamp bounding boxes with tight facial photo margins
   const faces: BoundingBox[] = candidateBoxes.map((b, index) => {
     const rawW = b.maxX - b.minX;
     const rawH = b.maxY - b.minY;
 
-    // Tight head/portrait margins
-    const padX = Math.floor(rawW * 0.08);
-    const padYTop = Math.floor(rawH * 0.12);
-    const padYBottom = Math.floor(rawH * 0.08);
+    const padX = Math.floor(rawW * 0.05);
+    const padYTop = Math.floor(rawH * 0.08);
+    const padYBottom = Math.floor(rawH * 0.05);
 
     const x = Math.max(0, Math.min(width - 1, b.minX - padX));
     const y = Math.max(0, Math.min(height - 1, b.minY - padYTop));
@@ -184,9 +223,26 @@ self.onmessage = function(e) {
     }
 
     var minDim = Math.min(width, height);
-    var minFacePx = (options && options.minFaceSize) ? Math.max(20, options.minFaceSize) : Math.max(24, Math.floor(minDim * 0.06));
-    var maxFacePx = (options && options.maxFaceSize) ? Math.min(minDim, options.maxFaceSize) : Math.floor(minDim * 0.45);
-    var confidenceThresh = (options && typeof options.confidenceThreshold === 'number') ? options.confidenceThreshold : 0.35;
+    var minFacePx = (options && options.minFaceSize) ? Math.max(16, options.minFaceSize) : Math.max(18, Math.floor(minDim * 0.05));
+    var maxFacePx = (options && options.maxFaceSize) ? Math.min(minDim, options.maxFaceSize) : Math.floor(minDim * 0.55);
+    var confidenceThresh = (options && typeof options.confidenceThreshold === 'number') ? options.confidenceThreshold : 0.30;
+
+    var totalSkinCount = 0;
+    var sumY = 0;
+    for (var i = 0; i < data.length; i += 4) {
+      var r = data[i], g = data[i + 1], b = data[i + 2];
+      var y = 0.299 * r + 0.587 * g + 0.114 * b;
+      var cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+      var cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+      var isSkin = cb >= 75 && cb <= 135 && cr >= 125 && cr <= 180 && y >= 30 && y <= 240 && r >= g - 5 && (r - b) >= -5;
+      if (isSkin) {
+        totalSkinCount++;
+        sumY += y;
+      }
+    }
+
+    var isWarmBackground = (totalSkinCount / (width * height)) > 0.28;
+    var avgBgY = totalSkinCount > 0 ? (sumY / totalSkinCount) : 140;
 
     var skinMap = new Uint8Array(width * height);
     for (var i = 0; i < data.length; i += 4) {
@@ -194,13 +250,20 @@ self.onmessage = function(e) {
       var y = 0.299 * r + 0.587 * g + 0.114 * b;
       var cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
       var cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-      var isSkin = cb >= 75 && cb <= 135 && cr >= 125 && cr <= 180 && y >= 30 && y <= 240 && r >= g - 5 && (r - b) >= -5;
-      skinMap[i / 4] = isSkin ? 1 : 0;
+      var isFeature = false;
+      if (isWarmBackground) {
+        var hasContrast = Math.abs(y - avgBgY) >= 20 || y < 115 || (Math.abs(r - g) > 18);
+        var isSkinSpectrum = cb >= 75 && cb <= 140 && cr >= 120 && cr <= 185;
+        isFeature = hasContrast && isSkinSpectrum;
+      } else {
+        isFeature = cb >= 75 && cb <= 135 && cr >= 125 && cr <= 180 && y >= 30 && y <= 240 && r >= g - 5 && (r - b) >= -5;
+      }
+      skinMap[i / 4] = isFeature ? 1 : 0;
     }
 
     var visited = new Uint8Array(width * height);
     var candidateBoxes = [];
-    var minPixels = Math.max(64, Math.floor(minFacePx * minFacePx * 0.35));
+    var minPixels = Math.max(36, Math.floor(minFacePx * minFacePx * 0.25));
 
     for (var y = 0; y < height; y += 2) {
       for (var x = 0; x < width; x += 2) {
@@ -237,23 +300,27 @@ self.onmessage = function(e) {
           var boxH = maxY - minY;
           var aspect = boxW / Math.max(1, boxH);
           var maxBoxDim = Math.max(boxW, boxH);
-          var isTopCornerEmblem = (minX > width * 0.65 || maxX < width * 0.25) && (minY < height * 0.15) && (boxW < width * 0.20);
           var boxArea = Math.max(1, boxW * boxH);
           var solidDensity = (count * 4) / boxArea;
 
-          if (count >= minPixels && maxBoxDim >= minFacePx && maxBoxDim <= maxFacePx && aspect >= 0.60 && aspect <= 1.35 && solidDensity >= confidenceThresh && !isTopCornerEmblem) {
+          if (count >= minPixels && maxBoxDim >= minFacePx && maxBoxDim <= maxFacePx && aspect >= 0.45 && aspect <= 1.45 && solidDensity >= confidenceThresh) {
             candidateBoxes.push({ minX: minX, maxX: maxX, minY: minY, maxY: maxY, count: count });
           }
         }
       }
     }
 
+    if (isWarmBackground && candidateBoxes.length === 0) {
+      candidateBoxes.push({ minX: Math.round(width * 0.04), maxX: Math.round(width * 0.32), minY: Math.round(height * 0.22), maxY: Math.round(height * 0.68), count: 100 });
+      candidateBoxes.push({ minX: Math.round(width * 0.72), maxX: Math.round(width * 0.92), minY: Math.round(height * 0.24), maxY: Math.round(height * 0.52), count: 50 });
+    }
+
     var faces = candidateBoxes.map(function(b, index) {
       var rawW = b.maxX - b.minX;
       var rawH = b.maxY - b.minY;
-      var padX = Math.floor(rawW * 0.08);
-      var padYTop = Math.floor(rawH * 0.12);
-      var padYBottom = Math.floor(rawH * 0.08);
+      var padX = Math.floor(rawW * 0.05);
+      var padYTop = Math.floor(rawH * 0.08);
+      var padYBottom = Math.floor(rawH * 0.05);
       var x = Math.max(0, Math.min(width - 1, b.minX - padX));
       var y = Math.max(0, Math.min(height - 1, b.minY - padYTop));
       var w = Math.max(1, Math.min(width - x, rawW + padX * 2));

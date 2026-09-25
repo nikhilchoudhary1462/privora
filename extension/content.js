@@ -217,18 +217,38 @@
       results.push({ type: 'EMAIL', label: 'Email Address', value: match[0] });
     }
 
-    // 6. Phone
-    const phoneRegex = /(?:\+?91[-\s]?)?[6-9]\d{9}\b|\b(?:\+?1[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}\b/g;
+    // 6. Phone (Supports +91 / international, with 5-5 grouping, 3-3-4 grouping, or continuous 10 digits)
+    const phoneRegex = /(?:\+91[-\s]?)?\b[6-9]\d{4}[-\s]\d{5}\b|(?:\+91[-\s]?)?\b[6-9]\d{2}[-\s]\d{3}[-\s]\d{4}\b|(?:\+91[-\s]?)?\b[6-9]\d{9}\b|\b(?:\+?1[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}\b/g;
     while ((match = phoneRegex.exec(text)) !== null) {
       if (validatePhone(match[0])) {
-        results.push({ type: 'PHONE', label: 'Phone Number', value: match[0] });
+        results.push({ type: 'PHONE', label: 'Phone Number', value: match[0].trim() });
       }
     }
 
-    // 7. API Keys & Bearer Tokens
-    const apiKeyRegex = /sk-(?:proj-)?[a-zA-Z0-9_\-]{20,64}|AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{36}|Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi;
+    // 7. API Keys, Tokens & Secrets
+    const apiKeyRegex = /(?:test_|demo_|live_|prod_)?sk[_-](?:proj[_-]|live[_-]|test[_-])?[a-zA-Z0-9_\-]{8,64}|AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{36}|(?:test_|demo_)?api[_-](?:key[_-]|secret[_-])?[a-zA-Z0-9_\-]{6,64}|(?:demo_|test_)?tok[_-][a-zA-Z0-9_\-]{8,64}|Bearer\s+[a-zA-Z0-9_\-\.]{16,}/gi;
     while ((match = apiKeyRegex.exec(text)) !== null) {
-      results.push({ type: 'API_KEY', label: 'API Secret Key', value: match[0] });
+      if (!results.some(r => r.value === match[0])) {
+        results.push({ type: 'API_KEY', label: 'API Secret Key', value: match[0] });
+      }
+    }
+
+    // 7b. Labeled Credentials & Passwords
+    const labeledSecretRegex = /(?:(?:API\s*(?:Key|secret)|Access\s*Token|Secret\s*Key|Password|Auth\s*Token)(?:-like\s*value|\s*value|\s*secret)?\s*[:=\s]\s*)([^\s,;]+)/gi;
+    while ((match = labeledSecretRegex.exec(text)) !== null) {
+      const val = match[1]?.trim();
+      if (val && val.length >= 4 && !results.some(r => r.value === val)) {
+        results.push({ type: 'API_KEY', label: 'Secret Credential / Token', value: val });
+      }
+    }
+
+    // 7c. Labeled OTP (One-Time Password)
+    const otpRegex = /(?:(?:OTP|One-Time\s*Password|Verification\s*Code)\s*[:\-\s=]\s*)([0-9]{4,8})\b/gi;
+    while ((match = otpRegex.exec(text)) !== null) {
+      const val = match[1]?.trim();
+      if (val && !results.some(r => r.value === val)) {
+        results.push({ type: 'API_KEY', label: 'One-Time Password (OTP)', value: val });
+      }
     }
 
     // 8. Date of Birth (DOB)
@@ -281,7 +301,7 @@
       }
     }
 
-    const pinRegex = /\b(?:PIN|Postal Code|Pincode|Pin Code)?\s*[:\-\s]?([1-9][0-9]{2}\s?[0-9]{3})\b/gi;
+    const pinRegex = /\b(?:PIN|Postal Code|Pincode|Pin Code)\s*[:\-\s]?([1-9][0-9]{2}\s?[0-9]{3})\b/gi;
     while ((match = pinRegex.exec(text)) !== null) {
       const pinVal = match[1]?.trim();
       if (pinVal && !results.some(r => r.value && r.value.includes(pinVal))) {

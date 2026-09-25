@@ -181,8 +181,10 @@ export class PdfProcessor {
       hotfixes: ['px_scaling'],
     });
 
-    const imgData = typeof canvas === 'string' ? canvas : canvas.toDataURL('image/jpeg', 0.95);
-    pdf.addImage(imgData, 'JPEG', 0, 0, widthPx, heightPx);
+    const isPng = typeof canvas === 'string' ? canvas.startsWith('data:image/png') : true;
+    const format = isPng ? 'PNG' : 'JPEG';
+    const imgData = typeof canvas === 'string' ? canvas : canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.95);
+    pdf.addImage(imgData, format, 0, 0, widthPx, heightPx);
     return pdf.output('blob');
   }
 
@@ -208,8 +210,10 @@ export class PdfProcessor {
         const pageOrientation = p.width > p.height ? 'landscape' : 'portrait';
         pdf.addPage([p.width, p.height], pageOrientation);
       }
-      const imgData = typeof p.canvas === 'string' ? p.canvas : p.canvas.toDataURL('image/jpeg', 0.95);
-      pdf.addImage(imgData, 'JPEG', 0, 0, p.width, p.height);
+      const isPng = typeof p.canvas === 'string' ? p.canvas.startsWith('data:image/png') : true;
+      const format = isPng ? 'PNG' : 'JPEG';
+      const imgData = typeof p.canvas === 'string' ? p.canvas : p.canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.95);
+      pdf.addImage(imgData, format, 0, 0, p.width, p.height);
     });
 
     return pdf.output('blob');
