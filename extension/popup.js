@@ -101,24 +101,31 @@ if (masterToggle) {
 }
 
 // 3. Open Web Dashboard button
-document.getElementById('open-app-btn').addEventListener('click', () => {
-  const targetUrl = 'http://localhost:5173';
-  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
-    chrome.tabs.query({}, (tabs) => {
-      const existing = tabs.find((t) => t.url && t.url.includes('localhost:5173'));
-      if (existing && existing.id) {
-        chrome.tabs.update(existing.id, { active: true });
-        if (existing.windowId) {
-          chrome.windows.update(existing.windowId, { focused: true });
+const openAppBtn = document.getElementById('open-app-btn');
+if (openAppBtn) {
+  openAppBtn.addEventListener('click', () => {
+    const targetUrl = 'https://localhost:5173/';
+    if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
+      chrome.tabs.query({}, (tabs) => {
+        const existing = tabs.find((t) => t.url && (t.url.includes('localhost:5173') || t.url.includes('127.0.0.1:5173')));
+        if (existing && existing.id) {
+          if (existing.url && !existing.url.startsWith('https://')) {
+            chrome.tabs.update(existing.id, { url: targetUrl, active: true });
+          } else {
+            chrome.tabs.update(existing.id, { active: true });
+          }
+          if (existing.windowId) {
+            chrome.windows.update(existing.windowId, { focused: true });
+          }
+        } else {
+          chrome.tabs.create({ url: targetUrl });
         }
-      } else {
-        chrome.tabs.create({ url: targetUrl });
-      }
-    });
-  } else {
-    window.open(targetUrl, '_blank');
-  }
-});
+      });
+    } else {
+      window.open(targetUrl, '_blank');
+    }
+  });
+}
 
 // 4. Open Test Tool Page button
 const testBtn = document.getElementById('open-test-btn');
