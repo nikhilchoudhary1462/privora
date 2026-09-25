@@ -50,7 +50,7 @@ interface MemoryViewData {
 }
 
 interface RestoredUploadData {
-  record: EncryptedFileRecord;
+  record?: EncryptedFileRecord;
   restoredDataUrl: string;
   fileName: string;
   matchMethod: string;
@@ -94,6 +94,24 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
   useEffect(() => {
     loadVaultFiles();
+
+    // Listen for extension manifests bridged from content script
+    const handleMsg = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'PRIVORA_SYNC_EXTENSION_MANIFESTS' && Array.isArray(e.data.manifests)) {
+        (window as any)._privoraExtensionManifests = e.data.manifests;
+        try {
+          sessionStorage.setItem('privora_extension_manifests', JSON.stringify(e.data.manifests));
+        } catch (err) {}
+      }
+    };
+    window.addEventListener('message', handleMsg);
+    try {
+      window.postMessage({ type: 'PRIVORA_REQUEST_EXTENSION_MANIFESTS' }, '*');
+    } catch (e) {}
+
+    return () => {
+      window.removeEventListener('message', handleMsg);
+    };
   }, []);
 
   // Cleanup object URLs when closing memory view modal
@@ -149,7 +167,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
     return slices;
   };
 
-  // Upload an encrypted/masked file, match against vault records, and restore original plaintext
+  // Upload an encrypted/masked file, match against vault records or extension manifests, and restore original plaintext
   const handleUploadAndRestore = async (file: File) => {
     const currentSession = WebAuthnManager.getSession();
     let kek = currentSession.masterKEK;
@@ -169,8 +187,14 @@ export const VaultView: React.FC<VaultViewProps> = ({
     try {
       const allRecords = await vaultDB.getAllFiles();
 
-      if (allRecords.length === 0) {
-        throw new Error('Your local vault is empty. No records available to match against.');
+      // Retrieve any bridged extension manifests
+      let extensionManifests: any[] = [];
+      try {
+        const raw = sessionStorage.getItem('privora_extension_manifests');
+        if (raw) extensionManifests = JSON.parse(raw);
+      } catch (e) {}
+      if (typeof window !== 'undefined' && (window as any)._privoraExtensionManifests) {
+        extensionManifests = [...extensionManifests, ...(window as any)._privoraExtensionManifests];
       }
 
       // Compute uploaded file SHA-256 hash
@@ -182,147 +206,348 @@ export const VaultView: React.FC<VaultViewProps> = ({
         .replace(/^encrypted_/i, '')
         .replace(/^clean_/i, '')
         .replace(/^masked_/i, '')
+        .replace(/^synthetic_/i, '')
+        .replace(/^redacted_/i, '')
+        .replace(/^restored_/i, '')
         .replace(/\.[^/.]+$/, '')
         .toLowerCase();
 
-      // Search database for matching record
+      const isPdfFile = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+      // Search database for matching record first
       const matched = allRecords.find((rec) => {
-        // Match 1: Hash matching (against stored encryptedHash or baseline originalHash)
         if (rec.encryptedHash === uploadedHash || rec.originalHash === uploadedHash) return true;
-        // Match 2: Exact filename matching
         if (rec.fileName.toLowerCase() === file.name.toLowerCase()) return true;
-        // Match 3: Normalized basename matching
         const recBaseName = rec.fileName.replace(/\.[^/.]+$/, '').toLowerCase();
         if (recBaseName === cleanName) return true;
         if (file.name.toLowerCase().includes(recBaseName) || recBaseName.includes(cleanName)) return true;
         return false;
       });
 
-      if (!matched) {
-        throw new Error(`No matching record found in this vault for "${file.name}". Please ensure this document was originally encrypted on this device.`);
-      }
+      // Search extension manifests if not found in native vault
+      const matchedManifest = !matched ? extensionManifests.find((m) => {
+        if (m.origHash === uploadedHash || m.maskedHash === uploadedHash) return true;
+        if (m.fileName && m.fileName.toLowerCase() === file.name.toLowerCase()) return true;
+        const mBase = (m.baseName || m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
+        if (mBase === cleanName) return true;
+        if (file.name.toLowerCase().includes(mBase) || mBase.includes(cleanName)) return true;
+        return false;
+      }) : null;
 
-      // Unwrap DEK using Master KEK
-      const dek = await CryptoEngine.unwrapDEK(matched.wrappedDek, matched.iv, kek);
+      if (!matched && !matchedManifest) {
+        throw new Error(`No matching decryption record found in local vault or extension storage for "${file.name}". Please ensure this document was originally encrypted on this device.`);
+      }
 
       let restoredDataUrl = '';
       let objectUrlToRevoke: string | undefined;
       let decryptedCrops: CropSlice[] = [];
 
-      const isPdfFile = matched.originalMimeType === 'application/pdf' || matched.fileName.toLowerCase().endsWith('.pdf');
-
-      if (matched.pipelineUsed === 'AES-256-GCM-SELECTIVE-REGION' && matched.encryptedRegions) {
-        if (isPdfFile && matched.pdfPages && matched.pdfPages.length > 1) {
-          // Multi-Page PDF Restoration
+      // Case A: Matched with an Extension Manifest
+      if (matchedManifest) {
+        const isManifestPdf = matchedManifest.isPdf || isPdfFile;
+        if (isManifestPdf) {
+          const pdfResult = await PdfProcessor.processPdf(file);
           const restoredPages: { canvas: HTMLCanvasElement; width: number; height: number }[] = [];
-          for (const page of matched.pdfPages) {
-            const pageRegions = matched.encryptedRegions.filter(r => r.pageNumber === page.pageNumber || (!r.pageNumber && page.pageNumber === 1));
+
+          for (const page of pdfResult.pages) {
             const pageCanvas = document.createElement('canvas');
-            pageCanvas.width = page.width;
-            pageCanvas.height = page.height;
+            pageCanvas.width = page.pageDimensions.width;
+            pageCanvas.height = page.pageDimensions.height;
             const pCtx = pageCanvas.getContext('2d');
             if (!pCtx) continue;
 
-            if (pageRegions.length > 0) {
-              const restoredPageUrl = await CryptoEngine.decryptImageRegions(page.pageImageDataUrl, pageRegions, dek);
-              const img = new Image();
-              await new Promise<void>((res, rej) => {
-                img.onload = () => res();
-                img.onerror = () => rej(new Error(`Failed to load page ${page.pageNumber}`));
-                img.src = restoredPageUrl;
+            const pageImg = new Image();
+            await new Promise<void>((res, rej) => {
+              pageImg.onload = () => res();
+              pageImg.onerror = () => rej(new Error(`Failed to load page ${page.pageNumber}`));
+              pageImg.src = page.pageImageDataUrl;
+            });
+            pCtx.drawImage(pageImg, 0, 0);
+
+            const pageSlices = (matchedManifest.slices || []).filter(
+              (s: any) => s.pageNum === page.pageNumber || (!s.pageNum && page.pageNumber === 1)
+            );
+
+            for (const slice of pageSlices) {
+              const sImg = new Image();
+              await new Promise<void>((res) => {
+                sImg.onload = () => res();
+                sImg.onerror = () => res();
+                sImg.src = slice.cropDataUrl;
               });
-              pCtx.drawImage(img, 0, 0);
-            } else {
-              const img = new Image();
-              await new Promise<void>((res, rej) => {
-                img.onload = () => res();
-                img.onerror = () => rej(new Error(`Failed to load page ${page.pageNumber}`));
-                img.src = page.pageImageDataUrl;
+              const sx = Math.round(slice.normX * pageCanvas.width);
+              const sy = Math.round(slice.normY * pageCanvas.height);
+              const sw = Math.round(slice.normW * pageCanvas.width);
+              const sh = Math.round(slice.normH * pageCanvas.height);
+              pCtx.drawImage(sImg, sx, sy, sw, sh);
+
+              decryptedCrops.push({
+                label: slice.label || `Protected Region P${page.pageNumber}`,
+                dataUrl: slice.cropDataUrl,
+                fileName: `crop_p${page.pageNumber}_${cleanName}.png`,
               });
-              pCtx.drawImage(img, 0, 0);
             }
-            restoredPages.push({ canvas: pageCanvas, width: page.width, height: page.height });
+
+            restoredPages.push({ canvas: pageCanvas, width: pageCanvas.width, height: pageCanvas.height });
           }
-          const fullPdfBlob = PdfProcessor.exportMultiPagePdf(restoredPages);
+
+          const fullPdfBlob = restoredPages.length === 1
+            ? PdfProcessor.canvasToPdfBlob(restoredPages[0].canvas, restoredPages[0].width, restoredPages[0].height)
+            : PdfProcessor.exportMultiPagePdf(restoredPages);
+
           restoredDataUrl = URL.createObjectURL(fullPdfBlob);
           objectUrlToRevoke = restoredDataUrl;
-          decryptedCrops = await extractDecryptedCrops(matched.encryptedRegions, dek, matched.fileName);
-        } else {
-          // Single-Page or Image Document (JPEG, PNG, WebP)
-          const isUploadedImage = file.type.startsWith('image/') || !!file.name.match(/\.(png|jpe?g|webp|svg)$/i);
-          const isJpeg = file.type === 'image/jpeg' || !!file.name.match(/\.(jpe?g)$/i);
-          const isWebp = file.type === 'image/webp' || !!file.name.match(/\.webp$/i);
-          const chosenMime = isJpeg ? 'image/jpeg' : (isWebp ? 'image/webp' : 'image/png');
-          const ext = isJpeg ? 'jpg' : (isWebp ? 'webp' : 'png');
 
-          const targetSource = isUploadedImage ? URL.createObjectURL(file) : (typeof matched.encryptedBlob === 'string' ? matched.encryptedBlob : (matched.pdfPages?.[0]?.pageImageDataUrl || ''));
-
-          // Decrypt with adaptive compression preservation
-          const decryptedImgUrl = await CryptoEngine.decryptImageRegions(
-            targetSource,
-            matched.encryptedRegions,
-            dek,
-            undefined,
-            {
-              mimeType: chosenMime,
-              targetByteSize: file.size,
-            }
-          );
-
-          decryptedCrops = await extractDecryptedCrops(matched.encryptedRegions, dek, matched.fileName);
-
-          if (isUploadedImage) {
-            URL.revokeObjectURL(targetSource);
-          }
-
-          if (isPdfFile) {
-            const img = new Image();
-            await new Promise<void>((resolve, reject) => {
-              img.onload = () => resolve();
-              img.onerror = () => reject(new Error('Failed to load image for PDF restoration'));
-              img.src = decryptedImgUrl;
-            });
-            const pdfBlob = PdfProcessor.canvasToPdfBlob(decryptedImgUrl, img.naturalWidth || 800, img.naturalHeight || 1000);
-            restoredDataUrl = URL.createObjectURL(pdfBlob);
-            objectUrlToRevoke = restoredDataUrl;
-          } else {
-            restoredDataUrl = decryptedImgUrl;
-          }
-
-          const baseRestoredName = matched.fileName.replace(/\.[^/.]+$/, '');
-          const outputFileName = `restored_${baseRestoredName}.${ext}`;
-          const base64Part = decryptedImgUrl.includes(',') ? decryptedImgUrl.split(',')[1] : '';
-          const restoredSize = base64Part ? Math.round(base64Part.length * 0.75) : file.size;
+          const outputFileName = `restored_${cleanName}.pdf`;
 
           setRestoredResult({
-            record: matched,
             restoredDataUrl,
             fileName: outputFileName,
-            matchMethod: `Matched with Vault Record: ${matched.fileName} (SHA-256 Signature Verified)`,
+            matchMethod: `Matched with Privora Extension Shield Manifest (${matchedManifest.fileName || file.name})`,
             objectUrlToRevoke,
             crops: decryptedCrops,
-            isPdf: isPdfFile,
+            isPdf: true,
             uploadedSize: file.size,
-            restoredSize,
-            mimeType: chosenMime,
+            restoredSize: fullPdfBlob.size,
+            mimeType: 'application/pdf',
           });
-          setActionSuccess(`Matched and restored "${matched.fileName}" retaining compressed size (${(restoredSize / 1024).toFixed(1)} KB)!`);
-          await vaultDB.logEvent({
-            eventType: 'VIEW_MEMORY',
-            severity: 'SUCCESS',
-            source: 'WEB_APP',
-            fileId: matched.id,
-            fileName: matched.fileName,
-            actionTaken: 'Document uploaded from PC, matched with database record, and restored in memory preserving compression',
-            details: { uploadedFileName: file.name, uploadedSize: file.size, restoredSize },
+          setActionSuccess(`Matched with extension manifest and restored clean PDF "${outputFileName}"!`);
+          return;
+        } else {
+          // Standard Image file from extension
+          const img = new Image();
+          const targetUrl = URL.createObjectURL(file);
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error('Failed to load image for retrace'));
+            img.src = targetUrl;
           });
+
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('Canvas context error');
+          ctx.drawImage(img, 0, 0);
+
+          for (const slice of (matchedManifest.slices || [])) {
+            const sImg = new Image();
+            await new Promise<void>((res) => {
+              sImg.onload = () => res();
+              sImg.onerror = () => res();
+              sImg.src = slice.cropDataUrl;
+            });
+            const sx = Math.round(slice.normX * canvas.width);
+            const sy = Math.round(slice.normY * canvas.height);
+            const sw = Math.round(slice.normW * canvas.width);
+            const sh = Math.round(slice.normH * canvas.height);
+            ctx.drawImage(sImg, sx, sy, sw, sh);
+
+            decryptedCrops.push({
+              label: slice.label || 'Protected Slice',
+              dataUrl: slice.cropDataUrl,
+              fileName: `crop_${cleanName}.png`,
+            });
+          }
+
+          URL.revokeObjectURL(targetUrl);
+          const isJpeg = file.type === 'image/jpeg' || !!file.name.match(/\.(jpe?g)$/i);
+          const ext = isJpeg ? 'jpg' : 'png';
+          restoredDataUrl = canvas.toDataURL(isJpeg ? 'image/jpeg' : 'image/png', 0.90);
+          const outputFileName = `restored_${cleanName}.${ext}`;
+
+          setRestoredResult({
+            restoredDataUrl,
+            fileName: outputFileName,
+            matchMethod: `Matched with Privora Extension Shield Manifest (${matchedManifest.fileName || file.name})`,
+            crops: decryptedCrops,
+            isPdf: false,
+            uploadedSize: file.size,
+            restoredSize: Math.round(restoredDataUrl.length * 0.75),
+            mimeType: isJpeg ? 'image/jpeg' : 'image/png',
+          });
+          setActionSuccess(`Matched with extension manifest and restored "${outputFileName}"!`);
           return;
         }
+      }
+
+      // Case B: Matched with Native Vault Record
+      if (!matched) return;
+
+      // Unwrap DEK using Master KEK
+      const dek = await CryptoEngine.unwrapDEK(matched.wrappedDek, matched.iv, kek);
+      const isRecordPdf = isPdfFile || matched.originalMimeType === 'application/pdf' || matched.fileName.toLowerCase().endsWith('.pdf');
+
+      if (matched.pipelineUsed === 'AES-256-GCM-SELECTIVE-REGION' && matched.encryptedRegions) {
+        if (isRecordPdf) {
+          // Robust PDF Restoration (Works for 1-page AND multi-page PDFs)
+          let pagesToProcess: { pageNumber: number; pageImageDataUrl: string; width: number; height: number }[] = [];
+
+          if (matched.pdfPages && matched.pdfPages.length > 0) {
+            pagesToProcess = matched.pdfPages;
+          } else {
+            // Render directly from the uploaded PDF file
+            try {
+              const pdfRes = await PdfProcessor.processPdf(file);
+              pagesToProcess = pdfRes.pages.map(p => ({
+                pageNumber: p.pageNumber,
+                pageImageDataUrl: p.pageImageDataUrl,
+                width: p.pageDimensions.width,
+                height: p.pageDimensions.height,
+              }));
+            } catch (pErr) {
+              console.warn('Could not extract pages from uploaded PDF directly:', pErr);
+            }
+          }
+
+          if (pagesToProcess.length > 0) {
+            const restoredPages: { canvas: HTMLCanvasElement; width: number; height: number }[] = [];
+            for (const page of pagesToProcess) {
+              const pageRegions = matched.encryptedRegions.filter(
+                r => r.pageNumber === page.pageNumber || (!r.pageNumber && page.pageNumber === 1)
+              );
+              const pageCanvas = document.createElement('canvas');
+              pageCanvas.width = page.width;
+              pageCanvas.height = page.height;
+              const pCtx = pageCanvas.getContext('2d');
+              if (!pCtx) continue;
+
+              if (pageRegions.length > 0) {
+                const restoredPageUrl = await CryptoEngine.decryptImageRegions(page.pageImageDataUrl, pageRegions, dek);
+                const img = new Image();
+                await new Promise<void>((res, rej) => {
+                  img.onload = () => res();
+                  img.onerror = () => rej(new Error(`Failed to load page ${page.pageNumber}`));
+                  img.src = restoredPageUrl;
+                });
+                pCtx.drawImage(img, 0, 0);
+              } else {
+                const img = new Image();
+                await new Promise<void>((res, rej) => {
+                  img.onload = () => res();
+                  img.onerror = () => rej(new Error(`Failed to load page ${page.pageNumber}`));
+                  img.src = page.pageImageDataUrl;
+                });
+                pCtx.drawImage(img, 0, 0);
+              }
+              restoredPages.push({ canvas: pageCanvas, width: page.width, height: page.height });
+            }
+
+            const fullPdfBlob = restoredPages.length === 1
+              ? PdfProcessor.canvasToPdfBlob(restoredPages[0].canvas, restoredPages[0].width, restoredPages[0].height)
+              : PdfProcessor.exportMultiPagePdf(restoredPages);
+
+            restoredDataUrl = URL.createObjectURL(fullPdfBlob);
+            objectUrlToRevoke = restoredDataUrl;
+            decryptedCrops = await extractDecryptedCrops(matched.encryptedRegions, dek, matched.fileName);
+
+            const baseRestoredName = matched.fileName.replace(/\.[^/.]+$/, '');
+            const outputFileName = `restored_${baseRestoredName}.pdf`;
+
+            setRestoredResult({
+              record: matched,
+              restoredDataUrl,
+              fileName: outputFileName,
+              matchMethod: `Matched with Vault Record: ${matched.fileName} (SHA-256 Signature Verified)`,
+              objectUrlToRevoke,
+              crops: decryptedCrops,
+              isPdf: true,
+              uploadedSize: file.size,
+              restoredSize: fullPdfBlob.size,
+              mimeType: 'application/pdf',
+            });
+            setActionSuccess(`Matched and restored complete PDF "${matched.fileName}" (${(fullPdfBlob.size / 1024).toFixed(1)} KB)!`);
+            await vaultDB.logEvent({
+              eventType: 'VIEW_MEMORY',
+              severity: 'SUCCESS',
+              source: 'WEB_APP',
+              fileId: matched.id,
+              fileName: matched.fileName,
+              actionTaken: 'PDF document uploaded from PC, matched with database record, and restored in memory',
+              details: { uploadedFileName: file.name, uploadedSize: file.size, restoredSize: fullPdfBlob.size },
+            });
+            return;
+          }
+        }
+
+        // Standard Image Document (JPEG, PNG, WebP)
+        const isUploadedImage = file.type.startsWith('image/') || !!file.name.match(/\.(png|jpe?g|webp|svg)$/i);
+        const isJpeg = file.type === 'image/jpeg' || !!file.name.match(/\.(jpe?g)$/i);
+        const isWebp = file.type === 'image/webp' || !!file.name.match(/\.webp$/i);
+        const chosenMime = isJpeg ? 'image/jpeg' : (isWebp ? 'image/webp' : 'image/png');
+        const ext = isJpeg ? 'jpg' : (isWebp ? 'webp' : 'png');
+
+        let targetSource = '';
+        let targetRevokeUrl: string | undefined = undefined;
+
+        if (isUploadedImage) {
+          targetSource = URL.createObjectURL(file);
+          targetRevokeUrl = targetSource;
+        } else if (typeof matched.encryptedBlob === 'string') {
+          targetSource = matched.encryptedBlob;
+        } else if (matched.encryptedBlob instanceof Blob) {
+          targetSource = URL.createObjectURL(matched.encryptedBlob);
+          targetRevokeUrl = targetSource;
+        } else if (matched.pdfPages?.[0]?.pageImageDataUrl) {
+          targetSource = matched.pdfPages[0].pageImageDataUrl;
+        }
+
+        if (!targetSource) {
+          throw new Error('Missing base image source for region decryption.');
+        }
+
+        const decryptedImgUrl = await CryptoEngine.decryptImageRegions(
+          targetSource,
+          matched.encryptedRegions,
+          dek,
+          undefined,
+          {
+            mimeType: chosenMime,
+            targetByteSize: file.size,
+          }
+        );
+
+        if (targetRevokeUrl) {
+          URL.revokeObjectURL(targetRevokeUrl);
+        }
+
+        decryptedCrops = await extractDecryptedCrops(matched.encryptedRegions, dek, matched.fileName);
+        restoredDataUrl = decryptedImgUrl;
+
+        const baseRestoredName = matched.fileName.replace(/\.[^/.]+$/, '');
+        const outputFileName = `restored_${baseRestoredName}.${ext}`;
+        const base64Part = decryptedImgUrl.includes(',') ? decryptedImgUrl.split(',')[1] : '';
+        const restoredSize = base64Part ? Math.round(base64Part.length * 0.75) : file.size;
+
+        setRestoredResult({
+          record: matched,
+          restoredDataUrl,
+          fileName: outputFileName,
+          matchMethod: `Matched with Vault Record: ${matched.fileName} (SHA-256 Signature Verified)`,
+          objectUrlToRevoke,
+          crops: decryptedCrops,
+          isPdf: false,
+          uploadedSize: file.size,
+          restoredSize,
+          mimeType: chosenMime,
+        });
+        setActionSuccess(`Matched and restored "${matched.fileName}" retaining compressed size (${(restoredSize / 1024).toFixed(1)} KB)!`);
+        await vaultDB.logEvent({
+          eventType: 'VIEW_MEMORY',
+          severity: 'SUCCESS',
+          source: 'WEB_APP',
+          fileId: matched.id,
+          fileName: matched.fileName,
+          actionTaken: 'Document uploaded from PC, matched with database record, and restored in memory preserving compression',
+          details: { uploadedFileName: file.name, uploadedSize: file.size, restoredSize },
+        });
+        return;
       } else if (matched.encryptedBlob instanceof Blob) {
+        // Full File Envelope Decryption
         const encBytes = await matched.encryptedBlob.arrayBuffer();
         const ivBytes = CryptoEngine.base64ToBuffer(matched.iv);
         const decBuf = await CryptoEngine.decryptBuffer(encBytes.slice(0), ivBytes, dek);
-        const blob = new Blob([decBuf], { type: isPdfFile ? 'application/pdf' : matched.originalMimeType });
+        const blob = new Blob([decBuf], { type: isRecordPdf ? 'application/pdf' : matched.originalMimeType });
         restoredDataUrl = URL.createObjectURL(blob);
         objectUrlToRevoke = restoredDataUrl;
 
@@ -333,7 +558,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
           matchMethod: `Matched with Vault Record: ${matched.fileName} (SHA-256 Signature Verified)`,
           objectUrlToRevoke,
           crops: decryptedCrops,
-          isPdf: isPdfFile,
+          isPdf: isRecordPdf,
           uploadedSize: file.size,
           restoredSize: blob.size,
           mimeType: blob.type,
@@ -348,25 +573,29 @@ export const VaultView: React.FC<VaultViewProps> = ({
           actionTaken: 'Document uploaded from PC, matched with database record, and restored in memory',
           details: { uploadedFileName: file.name },
         });
-        return;
-      } else {
-        throw new Error('Unsupported record format for restoration.');
+      } else if (typeof matched.encryptedBlob === 'string' && matched.pipelineUsed === 'SYNTHETIC-PSEUDONYMIZED') {
+        // Pseudonymized text / data URL
+        setRestoredResult({
+          record: matched,
+          restoredDataUrl: matched.encryptedBlob,
+          fileName: 'original_' + matched.fileName,
+          matchMethod: `Matched with Vault Record: ${matched.fileName} (SHA-256 Signature Verified)`,
+          crops: decryptedCrops,
+          isPdf: isRecordPdf,
+          uploadedSize: file.size,
+          restoredSize: file.size,
+          mimeType: matched.originalMimeType,
+        });
+        setActionSuccess(`Matched and restored "${matched.fileName}" from local vault!`);
       }
-      await vaultDB.logEvent({
-        eventType: 'VIEW_MEMORY',
-        severity: 'SUCCESS',
-        source: 'WEB_APP',
-        fileId: matched.id,
-        fileName: matched.fileName,
-        actionTaken: 'Document uploaded from PC, matched with database record, and restored in memory',
-        details: { uploadedFileName: file.name },
-      });
     } catch (err: any) {
-      console.error('Restoration error:', err);
-      setTamperAlert(err.message || 'Failed to restore original document.');
+      console.error('Restore document error:', err);
+      setTamperAlert(`Could not restore document: ${err.message || 'Decryption failed'}`);
     } finally {
       setIsRestoring(false);
-      if (uploadInputRef.current) uploadInputRef.current.value = '';
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = '';
+      }
     }
   };
 
@@ -552,7 +781,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
             record: file,
             maskedPdfUrl: maskedUrl,
             decryptedPdfUrl: decryptedUrl,
-            viewMode: 'ENCRYPTED_MASK',
+            viewMode: 'DECRYPTED',
             objectUrlToRevoke: decryptedUrl,
             crops: decryptedCrops,
           });
@@ -592,7 +821,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               decryptedPdfUrl: decryptedUrl,
               maskedDataUrl: typeof file.encryptedBlob === 'string' ? file.encryptedBlob : undefined,
               decryptedDataUrl: restoredDataUrl,
-              viewMode: 'ENCRYPTED_MASK',
+              viewMode: 'DECRYPTED',
               objectUrlToRevoke: decryptedUrl,
               crops: decryptedCrops,
             });
@@ -601,7 +830,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
               record: file,
               maskedDataUrl: typeof file.encryptedBlob === 'string' ? file.encryptedBlob : undefined,
               decryptedDataUrl: restoredDataUrl,
-              viewMode: 'ENCRYPTED_MASK',
+              viewMode: 'DECRYPTED',
               crops: decryptedCrops,
             });
           }
@@ -693,7 +922,22 @@ export const VaultView: React.FC<VaultViewProps> = ({
       // STEP 1: Verify Ciphertext Integrity before proceeding
       if (typeof file.encryptedBlob === 'string') {
         const currentCipherHash = await CryptoEngine.computeSHA256(file.encryptedBlob);
-        if (currentCipherHash !== file.encryptedHash) {
+        let isMatch = (currentCipherHash === file.encryptedHash);
+
+        if (!isMatch && file.encryptedBlob.startsWith('data:')) {
+          try {
+            const res = await fetch(file.encryptedBlob);
+            const buf = await res.arrayBuffer();
+            const binHash = await CryptoEngine.computeSHA256(buf);
+            if (binHash === file.encryptedHash) {
+              isMatch = true;
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (!isMatch) {
           await vaultDB.logEvent({
             eventType: 'TAMPER_ALERT',
             severity: 'ALERT',
@@ -813,9 +1057,15 @@ export const VaultView: React.FC<VaultViewProps> = ({
           return;
         } else {
           // Single-Page PDF fallback or Image
-          const baseSource = typeof file.encryptedBlob === 'string' 
+          let baseSource = typeof file.encryptedBlob === 'string' 
             ? file.encryptedBlob 
             : (file.pdfPages?.[0]?.pageImageDataUrl || '');
+          let blobRevokeUrl: string | undefined = undefined;
+
+          if (!baseSource && file.encryptedBlob instanceof Blob) {
+            baseSource = URL.createObjectURL(file.encryptedBlob);
+            blobRevokeUrl = baseSource;
+          }
           
           if (!baseSource) throw new Error('Missing base image source for region decryption.');
 
@@ -824,6 +1074,10 @@ export const VaultView: React.FC<VaultViewProps> = ({
             file.encryptedRegions || [],
             dek
           );
+
+          if (blobRevokeUrl) {
+            URL.revokeObjectURL(blobRevokeUrl);
+          }
 
           let exportUrl = restoredDataUrl;
           let exportFileName = 'restored_' + file.fileName;
@@ -1532,7 +1786,9 @@ export const VaultView: React.FC<VaultViewProps> = ({
 
             <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
               <span className="font-mono">
-                Original SHA-256: {restoredResult.record.originalHash.substring(0, 20)}...
+                {restoredResult.record?.originalHash 
+                  ? `Original SHA-256: ${restoredResult.record.originalHash.substring(0, 20)}...`
+                  : restoredResult.matchMethod}
               </span>
               <span className="text-emerald-600 font-semibold flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />

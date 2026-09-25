@@ -54,6 +54,33 @@
 
   if (isOwnPrivoraApp()) {
     console.log('[Privora Extension] Native Privora Web Application detected. Bypassing all extension listeners and UI.');
+
+    // Silent manifest bridge: Allows native web app (Vault & Studio) to decrypt files protected by the extension
+    function syncManifestsToNativeApp() {
+      try {
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+          chrome.storage.local.get(['aegis_active_manifests', 'aegis_encrypted_manifests'], (res) => {
+            const manifests = [...(res?.aegis_active_manifests || []), ...(res?.aegis_encrypted_manifests || [])];
+            if (manifests.length > 0) {
+              window.postMessage({ type: 'PRIVORA_SYNC_EXTENSION_MANIFESTS', manifests }, '*');
+              try {
+                sessionStorage.setItem('privora_extension_manifests', JSON.stringify(manifests));
+              } catch (e) {}
+            }
+          });
+        }
+      } catch (err) {}
+    }
+
+    syncManifestsToNativeApp();
+    setTimeout(syncManifestsToNativeApp, 800);
+
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'PRIVORA_REQUEST_EXTENSION_MANIFESTS') {
+        syncManifestsToNativeApp();
+      }
+    });
+
     return;
   }
 

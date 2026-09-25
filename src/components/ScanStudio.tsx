@@ -758,6 +758,151 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
     setDetection(null);
 
     try {
+      // Auto-detect encrypted files from Vault or Extension and decrypt them directly
+      const isEncryptedPrefix = !!file.name.match(/^(encrypted_|masked_|clean_|synthetic_|redacted_)/i);
+      let allRecords: EncryptedFileRecord[] = [];
+      try {
+        allRecords = await vaultDB.getAllFiles();
+      } catch (e) {}
+
+      const cleanName = file.name
+        .replace(/^encrypted_/i, '')
+        .replace(/^clean_/i, '')
+        .replace(/^masked_/i, '')
+        .replace(/^synthetic_/i, '')
+        .replace(/^redacted_/i, '')
+        .replace(/^restored_/i, '')
+        .replace(/\.[^/.]+$/, '')
+        .toLowerCase();
+
+      let uploadedHash = '';
+      try {
+        const fileBuf = await file.arrayBuffer();
+        uploadedHash = await CryptoEngine.computeSHA256(fileBuf);
+      } catch (e) {}
+
+      const matchedRecord = allRecords.find((rec) => {
+        if (uploadedHash && (rec.encryptedHash === uploadedHash || rec.originalHash === uploadedHash)) return true;
+        if (rec.fileName.toLowerCase() === file.name.toLowerCase()) return true;
+        const recBase = rec.fileName.replace(/\.[^/.]+$/, '').toLowerCase();
+        if (recBase === cleanName) return true;
+        if (file.name.toLowerCase().includes(recBase) || recBase.includes(cleanName)) return true;
+        return false;
+      });
+
+      if (matchedRecord) {
+        try {
+          let kek = session.masterKEK;
+          if (!kek) {
+            kek = await WebAuthnManager.getOrDeriveActiveKey();
+          }
+          const dek = await CryptoEngine.unwrapDEK(matchedRecord.wrappedDek, matchedRecord.iv, kek);
+          const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf') || matchedRecord.originalMimeType === 'application/pdf';
+
+          if (matchedRecord.pipelineUsed === 'AES-256-GCM-SELECTIVE-REGION' && matchedRecord.encryptedRegions) {
+            let pagesToProcess = matchedRecord.pdfPages || [];
+            if (isPdf && pagesToProcess.length === 0) {
+              try {
+                const pRes = await PdfProcessor.processPdf(file);
+                pagesToProcess = pRes.pages.map(p => ({
+                  pageNumber: p.pageNumber,
+                  pageImageDataUrl: p.pageImageDataUrl,
+                  width: p.pageDimensions.width,
+                  height: p.pageDimensions.height,
+                }));
+              } catch (e) {}
+            }
+
+            if (isPdf && pagesToProcess.length > 0) {
+              const restoredPages: { canvas: HTMLCanvasElement; width: number; height: number }[] = [];
+              for (const page of pagesToProcess) {
+                const pageRegions = matchedRecord.encryptedRegions.filter(
+                  r => r.pageNumber === page.pageNumber || (!r.pageNumber && page.pageNumber === 1)
+                );
+                const pCanvas = document.createElement('canvas');
+                pCanvas.width = page.width;
+                pCanvas.height = page.height;
+                const pCtx = pCanvas.getContext('2d');
+                if (!pCtx) continue;
+
+                if (pageRegions.length > 0) {
+                  const restoredPageUrl = await CryptoEngine.decryptImageRegions(page.pageImageDataUrl, pageRegions, dek);
+                  const img = new Image();
+                  await new Promise<void>((res, rej) => {
+                    img.onload = () => res();
+                    img.onerror = () => rej(new Error('Failed page load'));
+                    img.src = restoredPageUrl;
+                  });
+                  pCtx.drawImage(img, 0, 0);
+                } else {
+                  const img = new Image();
+                  await new Promise<void>((res, rej) => {
+                    img.onload = () => res();
+                    img.onerror = () => rej(new Error('Failed page load'));
+                    img.src = page.pageImageDataUrl;
+                  });
+                  pCtx.drawImage(img, 0, 0);
+                }
+                restoredPages.push({ canvas: pCanvas, width: page.width, height: page.height });
+              }
+
+              const fullPdf = restoredPages.length === 1
+                ? PdfProcessor.canvasToPdfBlob(restoredPages[0].canvas, restoredPages[0].width, restoredPages[0].height)
+                : PdfProcessor.exportMultiPagePdf(restoredPages);
+
+              const decUrl = URL.createObjectURL(fullPdf);
+              setPreviewImageUrl(restoredPages[0].canvas.toDataURL('image/jpeg', 0.85));
+              setLastEncryptedFile({
+                downloadUrl: decUrl,
+                fileName: `restored_${matchedRecord.fileName.replace(/\.[^/.]+$/, '')}.pdf`,
+                objectUrlToRevoke: decUrl,
+              });
+              setSuccessMessage(`Encrypted PDF matched with local vault! Decrypted & restored original successfully (${(fullPdf.size / 1024).toFixed(1)} KB).`);
+              setEncryptionSuccess(true);
+              setIsScanning(false);
+              return;
+            } else {
+              // Image restoration
+              const isImage = file.type.startsWith('image/') || !!file.name.match(/\.(png|jpe?g|webp|svg)$/i);
+              const sourceUrl = isImage ? URL.createObjectURL(file) : (typeof matchedRecord.encryptedBlob === 'string' ? matchedRecord.encryptedBlob : (matchedRecord.pdfPages?.[0]?.pageImageDataUrl || ''));
+              const isJpeg = file.type === 'image/jpeg' || !!file.name.match(/\.(jpe?g)$/i);
+              const chosenMime = isJpeg ? 'image/jpeg' : 'image/png';
+              const ext = isJpeg ? 'jpg' : 'png';
+
+              const decImg = await CryptoEngine.decryptImageRegions(sourceUrl, matchedRecord.encryptedRegions, dek, undefined, { mimeType: chosenMime, targetByteSize: file.size });
+              if (isImage) URL.revokeObjectURL(sourceUrl);
+
+              setPreviewImageUrl(decImg);
+              setLastEncryptedFile({
+                downloadUrl: decImg,
+                fileName: `restored_${cleanName}.${ext}`,
+              });
+              setSuccessMessage(`Encrypted image matched with local vault! Decrypted & restored original successfully.`);
+              setEncryptionSuccess(true);
+              setIsScanning(false);
+              return;
+            }
+          } else if (matchedRecord.encryptedBlob instanceof Blob) {
+            const encBytes = await matchedRecord.encryptedBlob.arrayBuffer();
+            const ivBytes = CryptoEngine.base64ToBuffer(matchedRecord.iv);
+            const decBuf = await CryptoEngine.decryptBuffer(encBytes.slice(0), ivBytes, dek);
+            const blob = new Blob([decBuf], { type: isPdf ? 'application/pdf' : matchedRecord.originalMimeType });
+            const url = URL.createObjectURL(blob);
+            setLastEncryptedFile({
+              downloadUrl: url,
+              fileName: `restored_${matchedRecord.fileName}`,
+              objectUrlToRevoke: url,
+            });
+            setSuccessMessage(`Encrypted document matched with local vault! Decrypted & restored original successfully.`);
+            setEncryptionSuccess(true);
+            setIsScanning(false);
+            return;
+          }
+        } catch (err: any) {
+          console.warn('ScanStudio direct decrypt error:', err);
+        }
+      }
+
       // 1. Run Deterministic Multi-Modal Detection (Face, OCR, Regex, EXIF, Hash)
       const detectResult = await MasterDetector.scanFile(file);
       setDetection(detectResult);
