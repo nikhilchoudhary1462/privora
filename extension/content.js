@@ -4509,19 +4509,29 @@
           });
           saveTokensToVault(newTokens);
 
-          if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
-            target.value = tokenized;
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-            target.dispatchEvent(new Event('change', { bubbles: true }));
-          } else if (target.isContentEditable) {
-            target.innerText = tokenized;
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-          } else {
-            const parent = target.closest('[contenteditable="true"]');
-            if (parent) {
-              parent.innerText = tokenized;
-              parent.dispatchEvent(new Event('input', { bubbles: true }));
+          const hostInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ? target : (target.closest ? target.closest('input, textarea') : null);
+          const hostEditable = target.isContentEditable ? target : (target.closest ? target.closest('[contenteditable="true"]') : null);
+
+          if (hostInput) {
+            hostInput.focus();
+            hostInput.value = tokenized;
+            hostInput.dispatchEvent(new Event('input', { bubbles: true }));
+            hostInput.dispatchEvent(new Event('change', { bubbles: true }));
+          } else if (hostEditable) {
+            try {
+              hostEditable.focus();
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(hostEditable);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              if (!document.execCommand('insertText', false, tokenized)) {
+                hostEditable.innerText = tokenized;
+              }
+            } catch (e) {
+              hostEditable.innerText = tokenized;
             }
+            hostEditable.dispatchEvent(new Event('input', { bubbles: true }));
           }
           removeWarning();
           showPrivoraHud({
@@ -4542,19 +4552,29 @@
             redacted = redacted.split(h.value).join(`[REDACTED: ${h.type} ${mask}]`);
           });
 
-          if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
-            target.value = redacted;
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-            target.dispatchEvent(new Event('change', { bubbles: true }));
-          } else if (target.isContentEditable) {
-            target.innerText = redacted;
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-          } else {
-            const parent = target.closest('[contenteditable="true"]');
-            if (parent) {
-              parent.innerText = redacted;
-              parent.dispatchEvent(new Event('input', { bubbles: true }));
+          const hostInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ? target : (target.closest ? target.closest('input, textarea') : null);
+          const hostEditable = target.isContentEditable ? target : (target.closest ? target.closest('[contenteditable="true"]') : null);
+
+          if (hostInput) {
+            hostInput.focus();
+            hostInput.value = redacted;
+            hostInput.dispatchEvent(new Event('input', { bubbles: true }));
+            hostInput.dispatchEvent(new Event('change', { bubbles: true }));
+          } else if (hostEditable) {
+            try {
+              hostEditable.focus();
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(hostEditable);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              if (!document.execCommand('insertText', false, redacted)) {
+                hostEditable.innerText = redacted;
+              }
+            } catch (e) {
+              hostEditable.innerText = redacted;
             }
+            hostEditable.dispatchEvent(new Event('input', { bubbles: true }));
           }
           removeWarning();
           showToast('Privora: Masked sensitive tokens inside prompt.');
@@ -4635,6 +4655,21 @@
     function decryptElementText(element) {
       if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
       if (element.classList && (element.classList.contains('privora-hud-toast') || element.classList.contains('privora-decrypted-token'))) return;
+
+      // CRITICAL: NEVER touch active input composers, textareas, or form inputs!
+      if (
+        element.tagName === 'INPUT' || 
+        element.tagName === 'TEXTAREA' || 
+        element.isContentEditable || 
+        (element.closest && element.closest('input, textarea, [contenteditable="true"], #prompt-textarea, form'))
+      ) {
+        return;
+      }
+
+      // Restrict decryption ONLY to assistant responses or rendered output markdown
+      const isAssistantContainer = (element.closest && element.closest('[data-message-author-role="assistant"], .markdown, .prose, .font-claude-message, [data-testid*="conversation-turn-"]')) ||
+                                   (element.matches && element.matches('[data-message-author-role="assistant"], .markdown, .prose, .font-claude-message'));
+      if (!isAssistantContainer) return;
 
       const vault = window._privoraTokenVault || [];
       if (vault.length === 0) return;
@@ -4717,7 +4752,7 @@
     setInterval(() => {
       const vault = window._privoraTokenVault || [];
       if (vault.length === 0) return;
-      const candidates = document.querySelectorAll('[data-message-author-role="assistant"], .markdown, .prose, article, p, div.message');
+      const candidates = document.querySelectorAll('[data-message-author-role="assistant"], .markdown, .prose');
       candidates.forEach(c => decryptElementText(c));
     }, 1500);
   }
