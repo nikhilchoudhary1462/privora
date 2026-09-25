@@ -267,12 +267,14 @@
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
     chrome.storage.local.get(['aegis_active_manifests'], (res) => {
       const active = res?.aegis_active_manifests || [];
+      window._privoraRecentManifests = active;
       const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
       if (currentHost && active.some(m => {
         const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
-        return mHost && (mHost === currentHost || mHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + mHost));
+        return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
       })) {
         window._privoraSiteHasEncryptedFiles = true;
+        try { sessionStorage.setItem('privora_has_encrypted', 'true'); } catch (e) {}
       }
     });
   }
@@ -289,7 +291,7 @@
     const memManifests = window._privoraRecentManifests || [];
     return memManifests.some(m => {
       const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
-      return mHost && (mHost === currentHost || mHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + mHost));
+      return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
     });
   }
 
@@ -2384,93 +2386,22 @@
     if (!matched && (candidateIsPan || candidateIsAadhaar)) {
       matched = manifests.find(m => {
         const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
-        const isHostMatch = mHost && (mHost === currentHost || mHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + mHost));
+        const isHostMatch = mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
         if (!isHostMatch) return false;
         const mFn = (m.fileName || '').toLowerCase();
         return (candidateIsPan && mFn.includes('pan')) || (candidateIsAadhaar && (mFn.includes('aadhaar') || mFn.includes('adhar')));
       });
     }
 
-    // Priority 3: Generic compression/download output name ON THE SAME SITE
+    // Priority 3: Hostname match (ONLY for the same website where the document was encrypted!)
     if (!matched && currentHost) {
-      const isGeneric = candidate.includes('compressed') ||
-        candidate.includes('min') ||
-        candidate.includes('download') ||
-        candidate.includes('image') ||
-        candidate.includes('output') ||
-        candidate.includes('result') ||
-        candidate.includes('edit');
-      if (isGeneric) {
-        matched = manifests.find(m => {
-          const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
-          return mHost && (mHost === currentHost || mHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + mHost));
-        });
-      }
+      matched = manifests.find(m => {
+        const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+        return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
+      });
     }
 
     return matched || null;
-  }
-
-  function isPrivoraMaskPresent(canvas, slices) {
-    if (!canvas || !slices || slices.length === 0) return false;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return false;
-
-    // Check each slice: if any primary protected region contains the synthetic checkerboard mask
-    for (const slice of slices) {
-      const sx = Math.round(slice.normX * canvas.width);
-      const sy = Math.round(slice.normY * canvas.height);
-      const sw = Math.round(slice.normW * canvas.width);
-      const sh = Math.round(slice.normH * canvas.height);
-
-      if (sw < 12 || sh < 12) continue;
-
-      // Sample with 10% inner padding to avoid anti-aliasing / edge blending artifacts
-      const insetX = Math.max(0, sx + Math.round(sw * 0.10));
-      const insetY = Math.max(0, sy + Math.round(sh * 0.10));
-      const insetW = Math.min(canvas.width - insetX, Math.max(1, Math.round(sw * 0.80)));
-      const insetH = Math.min(canvas.height - insetY, Math.max(1, Math.round(sh * 0.80)));
-
-      try {
-        const imgData = ctx.getImageData(insetX, insetY, insetW, insetH);
-        const data = imgData.data;
-        let maskPixelHits = 0;
-        let totalSamples = 0;
-
-        // Sample a grid across the protected slice
-        const stepX = Math.max(1, Math.floor(insetW / 6));
-        const stepY = Math.max(1, Math.floor(insetH / 6));
-
-        for (let y = stepY; y < insetH; y += stepY) {
-          for (let x = stepX; x < insetW; x += stepX) {
-            totalSamples++;
-            const idx = (y * insetW + x) * 4;
-            const r = data[idx];
-            const g = data[idx + 1];
-            const b = data[idx + 2];
-            const brightness = (r + g + b) / 3;
-
-            // Privora's synthetic mask tiles are:
-            // Color 1: #0f172a -> rgba(15, 23, 42)
-            // Color 2: #334155 -> rgba(51, 65, 85)
-            // Post-compression (JPEG 50-90%): dark slate blue hue with low brightness
-            const isDarkSlate = r <= 80 && g <= 100 && b <= 125 && brightness <= 90 && b >= (r - 12);
-            if (isDarkSlate) {
-              maskPixelHits++;
-            }
-          }
-        }
-
-        // If >= 50% of sampled pixels match the synthetic dark slate mask, this slice is shielded!
-        if (totalSamples > 0 && (maskPixelHits / totalSamples) >= 0.50) {
-          return true;
-        }
-      } catch (e) {
-        console.warn('[Privora Shield] Could not inspect image pixels for synthetic mask:', e);
-      }
-    }
-
-    return false;
   }
 
   async function retraceAndRestoreImage(imageBlob, fileName) {
@@ -2521,24 +2452,6 @@
           patchCanvas.height = height;
           const pCtx = patchCanvas.getContext('2d', { willReadFrequently: true });
           pCtx.drawImage(img, 0, 0, patchCanvas.width, patchCanvas.height);
-
-          // VERIFY SYNTHETIC MASK PRESENCE:
-          // Make sure this image actually contains Privora's synthetic checkerboard mask!
-          const maskVerified = isPrivoraMaskPresent(patchCanvas, matched.slices);
-          if (!maskVerified) {
-            console.log('[Privora Shield] Mask verification failed: Image does not have Privora encryption mask. Skipping restoration.');
-            URL.revokeObjectURL(url);
-            resolve(null);
-            return;
-          }
-
-          // ONLY NOW show the Decrypting HUD because we are 100% certain this is an encrypted file!
-          showPrivoraHud({
-            type: 'decrypting',
-            title: 'Privora Shield · Auto-Decrypt',
-            subtitle: `Encrypted document detected! Decrypting & restoring clean original...`,
-            durationMs: 0
-          });
 
           for (const slice of matched.slices) {
             const sliceImg = new Image();
@@ -2659,6 +2572,13 @@
           e.stopImmediatePropagation();
         }
 
+        showPrivoraHud({
+          type: 'decrypting',
+          title: 'Privora Shield · Auto-Decrypt',
+          subtitle: `Encrypted photo from ${window.location.hostname || 'site'} detected! Decrypting & restoring clean original...`,
+          durationMs: 0
+        });
+
         try {
           let blob;
           if (href.startsWith('data:')) {
@@ -2726,7 +2646,7 @@
 
             resolve(true);
           } else {
-            console.log('[Privora Shield] Auto-decryption skipped (unencrypted or unmodified file). Proceeding with natural download.');
+            console.warn('[Privora Shield] Auto-decryption found no matching slices, downloading file unmodified.');
             target.dataset.aegisRestored = 'true';
             target.click();
             resolve(false);
@@ -2755,11 +2675,6 @@
       return;
     }
 
-    // FAST GUARD: If current website has no recorded Privora encryptions, NEVER intercept!
-    if (!hasSiteEncryptedFiles()) {
-      return;
-    }
-
     let target = e.target;
     while (target && target.tagName !== 'A' && target.tagName !== 'BUTTON' && target !== document.body) {
       target = target.parentElement;
@@ -2767,6 +2682,24 @@
 
     if (!target || (target.tagName !== 'A' && target.tagName !== 'BUTTON')) return;
     if (target.dataset.aegisRestored === 'true') return;
+
+    // Check if the current website has ANY recorded encryption session or manifest
+    const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
+    const manifests = window._privoraRecentManifests || [];
+    const hasHostManifest = manifests.some(m => {
+      const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+      return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
+    });
+
+    let hasSession = false;
+    try {
+      hasSession = sessionStorage.getItem('privora_has_encrypted') === 'true' || window._privoraSiteHasEncryptedFiles === true;
+    } catch (err) {}
+
+    // IF THIS SITE HAS NO ENCRYPTED MANIFESTS AND NO ENCRYPTION SESSION, NEVER INTERCEPT!
+    if (!hasHostManifest && !hasSession) {
+      return;
+    }
 
     const href = target.getAttribute('href') || target.href || '';
     const downloadAttr = target.getAttribute('download');
@@ -2810,7 +2743,18 @@
         return origClick.apply(this, arguments);
       }
 
-      if (!hasSiteEncryptedFiles()) {
+      const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
+      const manifests = window._privoraRecentManifests || [];
+      const hasHostManifest = manifests.some(m => {
+        const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+        return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
+      });
+      let hasSession = false;
+      try {
+        hasSession = sessionStorage.getItem('privora_has_encrypted') === 'true' || window._privoraSiteHasEncryptedFiles === true;
+      } catch (err) {}
+
+      if (!hasHostManifest && !hasSession) {
         return origClick.apply(this, arguments);
       }
 
