@@ -170,7 +170,8 @@ export class PdfProcessor {
   }
 
   /**
-   * Convert an image canvas or dataUrl to a single-page downloadable PDF Blob
+   * Convert an image canvas or dataUrl to a single-page downloadable PDF Blob.
+   * Compresses embedded images to crisp JPEG with stream compression enabled to avoid 130MB file bloat.
    */
   static canvasToPdfBlob(canvas: HTMLCanvasElement | string, widthPx: number, heightPx: number): Blob {
     const orientation = widthPx > heightPx ? 'landscape' : 'portrait';
@@ -178,18 +179,50 @@ export class PdfProcessor {
       orientation,
       unit: 'px',
       format: [widthPx, heightPx],
+      compress: true,
       hotfixes: ['px_scaling'],
     });
 
-    const isPng = typeof canvas === 'string' ? canvas.startsWith('data:image/png') : true;
-    const format = isPng ? 'PNG' : 'JPEG';
-    const imgData = typeof canvas === 'string' ? canvas : canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.95);
-    pdf.addImage(imgData, format, 0, 0, widthPx, heightPx);
+    let imgData: string;
+    let format: 'JPEG' | 'PNG' = 'JPEG';
+
+    if (typeof canvas === 'string') {
+      if (canvas.startsWith('data:image/png') && typeof document !== 'undefined') {
+        try {
+          const tempC = document.createElement('canvas');
+          tempC.width = widthPx;
+          tempC.height = heightPx;
+          const ctx = tempC.getContext('2d');
+          if (ctx) {
+            const img = new Image();
+            img.src = canvas;
+            ctx.drawImage(img, 0, 0);
+            imgData = tempC.toDataURL('image/jpeg', 0.85);
+            format = 'JPEG';
+          } else {
+            imgData = canvas;
+            format = 'PNG';
+          }
+        } catch {
+          imgData = canvas;
+          format = 'PNG';
+        }
+      } else {
+        imgData = canvas;
+        format = canvas.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+      }
+    } else {
+      imgData = canvas.toDataURL('image/jpeg', 0.85);
+      format = 'JPEG';
+    }
+
+    pdf.addImage(imgData, format, 0, 0, widthPx, heightPx, undefined, 'FAST');
     return pdf.output('blob');
   }
 
   /**
-   * Convert an array of rendered/masked page canvases into a multi-page PDF Blob
+   * Convert an array of rendered/masked page canvases into a multi-page PDF Blob.
+   * Compresses all embedded page bitmaps using JPEG DCT encoding and enables jsPDF stream compression.
    */
   static exportMultiPagePdf(pages: { canvas: HTMLCanvasElement | string; width: number; height: number }[]): Blob {
     if (!pages || pages.length === 0) {
@@ -202,6 +235,7 @@ export class PdfProcessor {
       orientation,
       unit: 'px',
       format: [first.width, first.height],
+      compress: true,
       hotfixes: ['px_scaling'],
     });
 
@@ -210,10 +244,41 @@ export class PdfProcessor {
         const pageOrientation = p.width > p.height ? 'landscape' : 'portrait';
         pdf.addPage([p.width, p.height], pageOrientation);
       }
-      const isPng = typeof p.canvas === 'string' ? p.canvas.startsWith('data:image/png') : true;
-      const format = isPng ? 'PNG' : 'JPEG';
-      const imgData = typeof p.canvas === 'string' ? p.canvas : p.canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.95);
-      pdf.addImage(imgData, format, 0, 0, p.width, p.height);
+
+      let imgData: string;
+      let format: 'JPEG' | 'PNG' = 'JPEG';
+
+      if (typeof p.canvas === 'string') {
+        if (p.canvas.startsWith('data:image/png') && typeof document !== 'undefined') {
+          try {
+            const tempC = document.createElement('canvas');
+            tempC.width = p.width;
+            tempC.height = p.height;
+            const ctx = tempC.getContext('2d');
+            if (ctx) {
+              const img = new Image();
+              img.src = p.canvas;
+              ctx.drawImage(img, 0, 0);
+              imgData = tempC.toDataURL('image/jpeg', 0.85);
+              format = 'JPEG';
+            } else {
+              imgData = p.canvas;
+              format = 'PNG';
+            }
+          } catch {
+            imgData = p.canvas;
+            format = 'PNG';
+          }
+        } else {
+          imgData = p.canvas;
+          format = p.canvas.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+        }
+      } else {
+        imgData = p.canvas.toDataURL('image/jpeg', 0.85);
+        format = 'JPEG';
+      }
+
+      pdf.addImage(imgData, format, 0, 0, p.width, p.height, undefined, 'FAST');
     });
 
     return pdf.output('blob');

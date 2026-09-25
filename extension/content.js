@@ -785,23 +785,33 @@
   window._privoraRecentManifests = window._privoraRecentManifests || [];
 
   function findBoundingBoxForFinding(finding, rawItems, canvasWidth, canvasHeight) {
-    if (!finding || !finding.value || !rawItems || rawItems.length === 0) return null;
+    if (!finding || !rawItems || rawItems.length === 0) return null;
 
-    const rawTarget = finding.value.trim();
+    const rawTarget = (finding.value || finding.rawValue || '').trim();
+    if (!rawTarget) return null;
+
     const cleanTarget = rawTarget.replace(/[-\s]/g, '').toLowerCase();
-    if (cleanTarget.length < 2) return null;
+    const normTarget = rawTarget.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    if (cleanTarget.length < 2 && normTarget.length < 2) return null;
 
-    // PASS 1: Direct Single-Item Exact or Substring Match (Tightest & Most Accurate)
+    // Phone 10-digit suffix fallback (e.g. +91 90000 12345 -> 9000012345)
+    const phoneSuffix10 = (normTarget.length >= 10 && /^\d+$/.test(normTarget)) ? normTarget.slice(-10) : null;
+
+    // PASS 1: Direct Single-Item Exact, Substring, or Normalized Match (Tightest & Most Accurate)
     for (const item of rawItems) {
       const itemStr = (item.str || '').trim();
       if (!itemStr) continue;
       const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
+      const normItem = itemStr.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
       const exactSub = itemStr.includes(rawTarget);
-      const cleanSub = (cleanItem.length >= 4 && cleanItem === cleanTarget) ||
-                       (cleanTarget.length >= 4 && cleanItem.includes(cleanTarget));
+      const cleanSub = (cleanItem.length >= 3 && cleanItem === cleanTarget) ||
+                       (cleanTarget.length >= 3 && cleanItem.includes(cleanTarget));
+      const normSub = (normTarget.length >= 4 && normItem.includes(normTarget)) ||
+                      (phoneSuffix10 && normItem.includes(phoneSuffix10)) ||
+                      (normTarget.length >= 6 && normItem.length >= 6 && (normItem.includes(normTarget) || normTarget.includes(normItem)));
 
-      if (exactSub || cleanSub) {
+      if (exactSub || cleanSub || normSub) {
         const tx = item.transform[4] * 1.5;
         const ty = canvasHeight - (item.transform[5] * 1.5);
         const tw = Math.max(16, (item.width || 40) * 1.5);
@@ -837,33 +847,47 @@
     for (let i = 0; i < rawItems.length; i++) {
       const baseItem = rawItems[i];
       const baseTy = baseItem.transform ? baseItem.transform[5] : 0;
-      let accumulated = '';
+      let accumulatedClean = '';
+      let accumulatedNorm = '';
       const slice = [];
 
-      for (let j = i; j < Math.min(rawItems.length, i + 6); j++) {
+      for (let j = i; j < Math.min(rawItems.length, i + 8); j++) {
         const curItem = rawItems[j];
         const curTy = curItem.transform ? curItem.transform[5] : 0;
 
-        // CRITICAL: Items MUST be on the exact same line (within 5 points vertically)
-        if (Math.abs(curTy - baseTy) > 5) {
+        // CRITICAL: Items MUST be on the exact same line (within 6 points vertically)
+        if (Math.abs(curTy - baseTy) > 6) {
           break; // Stop immediately - do NOT cross rows or columns!
         }
 
         const curClean = (curItem.str || '').replace(/[-\s]/g, '').toLowerCase();
-        if (!curClean) continue;
+        const curNorm = (curItem.str || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+        if (!curClean && !curNorm) continue;
 
-        accumulated += curClean;
+        accumulatedClean += curClean;
+        accumulatedNorm += curNorm;
         slice.push(curItem);
 
-        if (accumulated.includes(cleanTarget)) {
-          const matchStart = accumulated.indexOf(cleanTarget);
-          const matchEnd = matchStart + cleanTarget.length;
+        const matched = (cleanTarget && accumulatedClean.includes(cleanTarget)) ||
+                        (normTarget && accumulatedNorm.includes(normTarget)) ||
+                        (phoneSuffix10 && accumulatedNorm.includes(phoneSuffix10));
+
+        if (matched) {
+          const targetToFind = (phoneSuffix10 && accumulatedNorm.includes(phoneSuffix10))
+            ? phoneSuffix10
+            : (normTarget && accumulatedNorm.includes(normTarget) ? normTarget : cleanTarget);
+          const matchTarget = targetToFind;
+          const searchSource = accumulatedNorm.includes(matchTarget) ? accumulatedNorm : accumulatedClean;
+          const matchStart = searchSource.indexOf(matchTarget);
+          const matchEnd = matchStart + matchTarget.length;
 
           // Filter slice to ONLY items that overlap [matchStart, matchEnd)
           let curCharPos = 0;
           const contributingItems = [];
           for (const it of slice) {
-            const itLen = (it.str || '').replace(/[-\s]/g, '').toLowerCase().length;
+            const itLen = (searchSource === accumulatedNorm)
+              ? (it.str || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase().length
+              : (it.str || '').replace(/[-\s]/g, '').toLowerCase().length;
             const itStart = curCharPos;
             const itEnd = curCharPos + itLen;
             if (itEnd > matchStart && itStart < matchEnd) {
@@ -872,33 +896,32 @@
             curCharPos = itEnd;
           }
 
-          if (contributingItems.length > 0) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            contributingItems.forEach(it => {
-              const tx = it.transform[4] * 1.5;
-              const ty = canvasHeight - (it.transform[5] * 1.5);
-              const tw = Math.max(14, (it.width || 30) * 1.5);
-              const th = Math.max(12, (it.height || Math.abs(it.transform[0]) || 14) * 1.5);
+          const itemsToUse = contributingItems.length > 0 ? contributingItems : slice;
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          itemsToUse.forEach(it => {
+            const tx = it.transform[4] * 1.5;
+            const ty = canvasHeight - (it.transform[5] * 1.5);
+            const tw = Math.max(14, (it.width || 30) * 1.5);
+            const th = Math.max(12, (it.height || Math.abs(it.transform[0]) || 14) * 1.5);
 
-              minX = Math.min(minX, tx - 3);
-              minY = Math.min(minY, ty - th - 2);
-              maxX = Math.max(maxX, tx + tw + 3);
-              maxY = Math.max(maxY, ty + 2);
-            });
+            minX = Math.min(minX, tx - 3);
+            minY = Math.min(minY, ty - th - 2);
+            maxX = Math.max(maxX, tx + tw + 3);
+            maxY = Math.max(maxY, ty + 2);
+          });
 
-            const bx = Math.max(0, Math.round(minX));
-            const by = Math.max(0, Math.round(minY));
-            const bw = Math.min(canvasWidth - bx, Math.round(maxX - minX));
-            const bh = Math.min(32, Math.round(maxY - minY));
+          const bx = Math.max(0, Math.round(minX));
+          const by = Math.max(0, Math.round(minY));
+          const bw = Math.min(canvasWidth - bx, Math.round(maxX - minX));
+          const bh = Math.min(32, Math.round(maxY - minY));
 
-            return {
-              x: bx,
-              y: by,
-              width: bw,
-              height: bh,
-              label: finding.label || finding.type
-            };
-          }
+          return {
+            x: bx,
+            y: by,
+            width: bw,
+            height: bh,
+            label: finding.label || finding.type
+          };
         }
       }
     }
@@ -1464,8 +1487,8 @@
               }
             });
 
-            // Also check for faces or visual sensitive cards on this page canvas
-            const visualBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name);
+            // Also check for faces on this page canvas (ignore fixed card template boxes on PDF documents)
+            const visualBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name).filter(v => v.label === 'Face Photo');
             visualBoxes.forEach(vBox => {
               const isOverlapping = pageBoxes.some(pBox => 
                 Math.abs(pBox.x - vBox.x) < 40 && Math.abs(pBox.y - vBox.y) < 40
@@ -1548,7 +1571,7 @@
             allPdfPages.push({
               pageNum: pNum,
               canvas: pCanvas,
-              pageDataUrl: pCanvas.toDataURL('image/png'),
+              pageDataUrl: pCanvas.toDataURL('image/jpeg', 0.85),
               text: pageText,
               boxes: pageBoxes,
               detectedPii: piiItems
@@ -1592,7 +1615,7 @@
               if (onConfirmAuto) onConfirmAuto(sanitizedPdfFile);
             },
             onOpenFullScreen: () => {
-              if (onOpenEditor) onOpenEditor(allPdfPages.flatMap(p => p.boxes));
+              if (onOpenEditor) onOpenEditor(allPdfPages.flatMap(p => p.boxes), allPdfPages);
             },
             onAllowPlaintext,
             onCancel,
@@ -1798,12 +1821,35 @@
   function createPdfBlobFromCanvases(canvasList) {
     if (!canvasList || canvasList.length === 0) return null;
     const numPages = canvasList.length;
-    const header = '%PDF-1.4\n';
-    const obj1 = '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n';
-    const kids = Array.from({ length: numPages }, (_, i) => `${3 + i * 3} 0 R`).join(' ');
-    const obj2 = `2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${numPages} >>\nendobj\n`;
 
-    const pageObjs = [];
+    const chunks = [];
+    let currentOffset = 0;
+
+    function addChunk(chunk) {
+      if (typeof chunk === 'string') {
+        const bytes = new TextEncoder().encode(chunk);
+        chunks.push(bytes);
+        currentOffset += bytes.length;
+      } else if (chunk instanceof Uint8Array) {
+        chunks.push(chunk);
+        currentOffset += chunk.length;
+      }
+    }
+
+    addChunk('%PDF-1.4\n');
+
+    const objOffsets = [];
+
+    // Catalog: obj 1
+    objOffsets[1] = currentOffset;
+    addChunk('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+
+    // Pages: obj 2
+    objOffsets[2] = currentOffset;
+    const kids = Array.from({ length: numPages }, (_, i) => `${3 + i * 3} 0 R`).join(' ');
+    addChunk(`2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${numPages} >>\nendobj\n`);
+
+    // For each page: pageObj (3+i*3), imObj (4+i*3), cntObj (5+i*3)
     for (let i = 0; i < numPages; i++) {
       const c = canvasList[i];
       const pageId = 3 + i * 3;
@@ -1814,39 +1860,46 @@
       const ptW = Math.round(w * 0.75);
       const ptH = Math.round(h * 0.75);
 
-      const imgDataUrl = c.toDataURL('image/jpeg', 0.90);
-      const binaryImg = atob(imgDataUrl.split(',')[1]);
-      const imgLen = binaryImg.length;
+      // Compress to crisp JPEG at 0.85 quality - produces tiny ~120KB per page (avoids 130MB file bloat)
+      const imgDataUrl = c.toDataURL('image/jpeg', 0.85);
+      const rawB64 = imgDataUrl.split(',')[1] || '';
+      const binStr = atob(rawB64);
+      const imgBytes = new Uint8Array(binStr.length);
+      for (let j = 0; j < binStr.length; j++) {
+        imgBytes[j] = binStr.charCodeAt(j);
+      }
 
-      const pObj = `${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${ptW} ${ptH}] /Resources << /XObject << /Im${i} ${imgId} 0 R >> >> /Contents ${contentId} 0 R >>\nendobj\n`;
-      const imObj = `${imgId} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgLen} >>\nstream\n${binaryImg}\nendstream\nendobj\n`;
+      // Page object
+      objOffsets[pageId] = currentOffset;
+      addChunk(`${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${ptW} ${ptH}] /Resources << /XObject << /Im${i} ${imgId} 0 R >> >> /Contents ${contentId} 0 R >>\nendobj\n`);
+
+      // Image XObject
+      objOffsets[imgId] = currentOffset;
+      const imHeader = `${imgId} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgBytes.length} >>\nstream\n`;
+      addChunk(imHeader);
+      addChunk(imgBytes);
+      addChunk('\nendstream\nendobj\n');
+
+      // Content stream
+      objOffsets[contentId] = currentOffset;
       const streamContent = `q ${ptW} 0 0 ${ptH} 0 0 cm /Im${i} Do Q`;
-      const cntObj = `${contentId} 0 obj\n<< /Length ${streamContent.length} >>\nstream\n${streamContent}\nendstream\nendobj\n`;
-
-      pageObjs.push(pObj, imObj, cntObj);
+      addChunk(`${contentId} 0 obj\n<< /Length ${streamContent.length} >>\nstream\n${streamContent}\nendstream\nendobj\n`);
     }
 
-    const allObjs = [obj1, obj2, ...pageObjs];
-    const totalObjs = allObjs.length;
-    let offset = header.length;
-    const offsets = [0];
-    for (const obj of allObjs) {
-      offsets.push(offset);
-      offset += obj.length;
-    }
+    const totalObjs = 2 + numPages * 3;
+    const startXref = currentOffset;
 
     let xref = `xref\n0 ${totalObjs + 1}\n0000000000 65535 f \n`;
     for (let i = 1; i <= totalObjs; i++) {
-      xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+      const off = objOffsets[i] || 0;
+      xref += String(off).padStart(10, '0') + ' 00000 n \n';
     }
-    const trailer = `trailer\n<< /Size ${totalObjs + 1} /Root 1 0 R >>\nstartxref\n${offset}\n%%EOF`;
+    const trailer = `trailer\n<< /Size ${totalObjs + 1} /Root 1 0 R >>\nstartxref\n${startXref}\n%%EOF`;
 
-    const fullPdf = header + allObjs.join('') + xref + trailer;
-    const pdfBytes = new Uint8Array(fullPdf.length);
-    for (let i = 0; i < fullPdf.length; i++) {
-      pdfBytes[i] = fullPdf.charCodeAt(i) & 0xff;
-    }
-    return new Blob([pdfBytes], { type: 'application/pdf' });
+    addChunk(xref);
+    addChunk(trailer);
+
+    return new Blob(chunks, { type: 'application/pdf' });
   }
 
   function createPdfBlobFromCanvas(canvas) {
@@ -1862,6 +1915,7 @@
     file,
     initialBoxes = [],
     detectedItems = [],
+    preloadedPdfPages = null,
     onConfirmMask,
     onAllowPlaintext,
     onCancel,
@@ -2172,11 +2226,12 @@
     // Load File (PDF, Image, or Text Document) into Preview Canvas
     baseImage = new Image();
 
-    if (isPdf) {
+    if (isPdf && preloadedPdfPages && preloadedPdfPages.length > 0) {
+      pdfPages = preloadedPdfPages;
+    } else if (isPdf) {
       const { pdfLib, workerLib } = ensurePdfWorkerHandler();
 
       if (pdfLib) {
-
         try {
           const arrayBuffer = await file.arrayBuffer();
           const loadingTask = pdfLib.getDocument({
@@ -2232,7 +2287,7 @@
             pdfPages.push({
               pageNum: pNum,
               canvas: pCanvas,
-              pageDataUrl: pCanvas.toDataURL('image/png'),
+              pageDataUrl: pCanvas.toDataURL('image/jpeg', 0.85),
               text: pageText,
               boxes: pageBoxes,
               detectedPii: piiItems
@@ -3143,11 +3198,12 @@
           onCancel: () => {
             cancelCommit();
           },
-          onOpenEditor: (detectedBoxes) => {
+          onOpenEditor: (detectedBoxes, preloadedPdfPages) => {
             showFileInterceptionModal({
               file,
               initialBoxes: detectedBoxes || [],
               detectedItems: [],
+              preloadedPdfPages: preloadedPdfPages || null,
               onConfirmMask: (sanitized) => {
                 commitFile(sanitized);
               },
@@ -3237,11 +3293,12 @@
           onCancel: () => {
             isCommitted = true;
           },
-          onOpenEditor: (detectedBoxes) => {
+          onOpenEditor: (detectedBoxes, preloadedPdfPages) => {
             showFileInterceptionModal({
               file,
               initialBoxes: detectedBoxes || [],
               detectedItems: [],
+              preloadedPdfPages: preloadedPdfPages || null,
               onConfirmMask: (sanitized) => {
                 commitDrop(sanitized);
               },

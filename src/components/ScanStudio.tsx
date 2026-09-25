@@ -1258,8 +1258,8 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
                   } catch (e) {}
                 });
 
-                // Encrypt regions on this page canvas and obtain masked image
-                const { maskedImageDataUrl, encryptedRegionRecords } = await CryptoEngine.encryptImageRegions(pageCanvas, pageRegions, dek);
+                // Encrypt regions on this page canvas and obtain masked image with crisp JPEG compression (avoids 130MB PNG bloat)
+                const { maskedImageDataUrl, encryptedRegionRecords } = await CryptoEngine.encryptImageRegions(pageCanvas, pageRegions, dek, 'image/jpeg', 0.88);
                 encryptedRegionRecords.forEach(r => {
                   allRegionRecords.push({ ...r, pageNumber: page.pageNumber });
                 });
