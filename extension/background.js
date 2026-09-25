@@ -60,6 +60,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'STORE_TOKEN_VAULT' && Array.isArray(message.tokens)) {
+    chrome.storage.local.get(['privora_token_vault'], (res) => {
+      const existing = res.privora_token_vault || [];
+      const tokenMap = new Map();
+      existing.forEach(t => tokenMap.set(t.synthetic, t));
+      message.tokens.forEach(t => tokenMap.set(t.synthetic, t));
+      const updated = Array.from(tokenMap.values()).slice(-200);
+      chrome.storage.local.set({ privora_token_vault: updated }, () => {
+        sendResponse({ success: true, count: updated.length });
+      });
+    });
+    return true;
+  }
+
+  if (message.type === 'GET_TOKEN_VAULT') {
+    chrome.storage.local.get(['privora_token_vault'], (res) => {
+      sendResponse({ tokens: res.privora_token_vault || [] });
+    });
+    return true;
+  }
+
   if (message.type === 'FETCH_BLOB' && message.url) {
     fetch(message.url, { credentials: 'include' })
       .then(res => {

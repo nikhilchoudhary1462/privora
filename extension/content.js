@@ -3541,9 +3541,9 @@
     const id = String(target.id || '').toLowerCase();
 
     const isImageDownload = downloadAttr !== null ||
-      href.match(/\.(png|jpe?g|webp|svg|bmp|gif|pdf)$/i) ||
+      href.match(/\.(png|jpe?g|webp|svg|bmp|gif|pdf|txt|md|markdown|json|csv|docx?)$/i) ||
       href.startsWith('blob:') ||
-      href.startsWith('data:image/') ||
+      href.startsWith('data:') ||
       href.toLowerCase().includes('download') ||
       href.toLowerCase().includes('/output/') ||
       href.toLowerCase().includes('/get/') ||
@@ -3573,7 +3573,8 @@
           }
         }
 
-        if (manifests.length === 0) {
+        const tokenVault = window._privoraTokenVault || [];
+        if (manifests.length === 0 && tokenVault.length === 0) {
           resolve(false);
           return;
         }
@@ -3584,11 +3585,11 @@
         }
         if (!candidateName || !candidateName.includes('.')) {
           const ariaLabel = target.getAttribute('aria-label') || target.getAttribute('title') || '';
-          if (ariaLabel.match(/\.(pdf|png|jpe?g|webp|docx?|txt)$/i)) {
+          if (ariaLabel.match(/\.(pdf|png|jpe?g|webp|docx?|txt|md)$/i)) {
             candidateName = ariaLabel;
           } else {
             const container = target.closest('li, [data-testid], div, article, section') || target.parentElement;
-            const containerMatch = container?.innerText?.match(/\b[a-zA-Z0-9_\-\.\s]+\.(?:pdf|png|jpe?g|webp|docx?|txt)\b/i);
+            const containerMatch = container?.innerText?.match(/\b[a-zA-Z0-9_\-\.\s]+\.(?:pdf|png|jpe?g|webp|docx?|txt|md)\b/i);
             if (containerMatch && containerMatch[0]) {
               candidateName = containerMatch[0].trim();
             }
@@ -3610,7 +3611,8 @@
           }
         }
 
-        if (!matched || !matched.slices || matched.slices.length === 0) {
+        const isPotentialTextDoc = candidateName.match(/\.(txt|md|markdown|json|csv|html|rtf|docx?)$/i);
+        if ((!matched || !matched.slices || matched.slices.length === 0) && (!isPotentialTextDoc || tokenVault.length === 0)) {
           resolve(false);
           return;
         }
@@ -3623,7 +3625,7 @@
         showPrivoraHud({
           type: 'decrypting',
           title: 'Privora Shield · Auto-Decrypt',
-          subtitle: `Encrypted document detected! Decrypting & restoring clean original...`,
+          subtitle: `Protected document detected! Decrypting & restoring clean original...`,
           durationMs: 0
         });
 
@@ -3657,6 +3659,53 @@
             target.click();
             resolve(false);
             return;
+          }
+
+          // Check for text/markdown document token restoration
+          if (isPotentialTextDoc && tokenVault.length > 0) {
+            try {
+              const textContent = await blob.text();
+              let restoredText = textContent;
+              let tokHits = 0;
+              for (const tok of tokenVault) {
+                if (tok.synthetic && restoredText.includes(tok.synthetic)) {
+                  restoredText = restoredText.split(tok.synthetic).join(tok.original);
+                  tokHits++;
+                }
+              }
+              if (tokHits > 0) {
+                const restoredBlob = new Blob([restoredText], { type: blob.type || 'text/plain' });
+                const finalUrl = URL.createObjectURL(restoredBlob);
+                const a = document.createElement('a');
+                a.href = finalUrl;
+                a.download = candidateName;
+                a.dataset.aegisRestored = 'true';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(finalUrl), 10000);
+
+                showPrivoraHud({
+                  type: 'decrypted',
+                  title: 'Privora Shield · Document Restored',
+                  subtitle: `Restored ${tokHits} real value(s) in downloaded document before saving.`,
+                  durationMs: 4500
+                });
+
+                logExtensionAuditEvent({
+                  eventType: 'AUTO_DECRYPT_RESTORE',
+                  severity: 'INFO',
+                  actionTaken: `Auto-decrypted ${tokHits} synthetic tokens in downloaded file ${candidateName}`,
+                  details: { fileName: candidateName, tokenHits: tokHits },
+                  riskScore: 0
+                });
+
+                resolve(true);
+                return;
+              }
+            } catch (txtErr) {
+              console.warn('[Privora Shield] Text restore error:', txtErr);
+            }
           }
 
           const result = await retraceAndRestoreImage(blob, candidateName);
@@ -3851,6 +3900,94 @@
   }
 
   // -------------------------------------------------------------
+  // 8b. Bi-Directional Format-Preserving Synthetic Engine & Token Vault
+  // -------------------------------------------------------------
+  const SYNTH_PERSONA_FIRST = ['Alex', 'Jordan', 'Taylor', 'Morgan', 'Sam', 'Chris', 'Jamie', 'Robin', 'Aarav', 'Priya', 'Rohan', 'Ananya', 'Vikram', 'Neha'];
+  const SYNTH_PERSONA_LAST = ['Turner', 'Miller', 'Davis', 'Wilson', 'Anderson', 'Sharma', 'Patel', 'Verma', 'Gupta', 'Iyer', 'Reddy', 'Chopra'];
+  const SYNTH_PERSONA_DOMAINS = ['sandbox.test', 'synthetic.org', 'demo-vault.internal', 'privacy-sandbox.net'];
+
+  window._privoraTokenVault = window._privoraTokenVault || [];
+
+  function generateSyntheticTokenForFinding(finding, seedStr) {
+    const seed = seedStr || (finding ? (finding.value || finding.type) : 'privora') + Date.now();
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+    const r1 = (hash % 1000) / 1000;
+    const r2 = ((hash >>> 3) % 1000) / 1000;
+    const r3 = ((hash >>> 6) % 1000) / 1000;
+
+    const type = finding ? finding.type : '';
+    if (type === 'EMAIL') {
+      const fName = SYNTH_PERSONA_FIRST[Math.floor(r1 * SYNTH_PERSONA_FIRST.length)].toLowerCase();
+      const num = Math.floor(r2 * 900) + 100;
+      const dom = SYNTH_PERSONA_DOMAINS[Math.floor(r3 * SYNTH_PERSONA_DOMAINS.length)];
+      return `${fName}.${num}@${dom}`;
+    }
+    if (type === 'PHONE') {
+      const p1 = Math.floor(r1 * 90000) + 10000;
+      const p2 = Math.floor(r2 * 90000) + 10000;
+      return `+91 ${p1} ${p2}`;
+    }
+    if (type === 'AADHAAR') {
+      const d1 = Math.floor(r1 * 8) + 2;
+      const rest = String(Math.floor(r2 * 10000000000)).padStart(10, '3');
+      const base11 = `${d1}${rest.slice(0, 10)}`;
+      return `${base11.slice(0, 4)} ${base11.slice(4, 8)} ${base11.slice(8, 11)}4`;
+    }
+    if (type === 'PAN_CARD') {
+      const l = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+      const c1 = l[Math.floor(r1 * l.length)];
+      const c2 = l[Math.floor(r2 * l.length)];
+      const num = String(Math.floor(r3 * 9000) + 1000);
+      return `${c1}BK${c2}P${num}Z`;
+    }
+    if (type === 'CREDIT_CARD') {
+      const c2 = String(Math.floor(r1 * 9000) + 1000);
+      const c3 = String(Math.floor(r2 * 9000) + 1000);
+      const c4 = String(Math.floor(r3 * 9000) + 1000);
+      return `4532 ${c2} ${c3} ${c4}`;
+    }
+    if (type === 'API_KEY') {
+      return `sk_live_syn_${Math.random().toString(36).substring(2, 14)}`;
+    }
+    const fName = SYNTH_PERSONA_FIRST[Math.floor(r1 * SYNTH_PERSONA_FIRST.length)];
+    const lName = SYNTH_PERSONA_LAST[Math.floor(r2 * SYNTH_PERSONA_LAST.length)];
+    return `${fName} ${lName}`;
+  }
+
+  function syncTokenVaultFromStorage() {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(['privora_token_vault'], (res) => {
+          if (res && res.privora_token_vault && Array.isArray(res.privora_token_vault)) {
+            const map = new Map();
+            (window._privoraTokenVault || []).forEach(t => map.set(t.synthetic, t));
+            res.privora_token_vault.forEach(t => map.set(t.synthetic, t));
+            window._privoraTokenVault = Array.from(map.values());
+          }
+        });
+      }
+    } catch (e) {}
+  }
+
+  function saveTokensToVault(newTokens) {
+    if (!newTokens || newTokens.length === 0) return;
+    const map = new Map();
+    (window._privoraTokenVault || []).forEach(t => map.set(t.synthetic, t));
+    newTokens.forEach(t => map.set(t.synthetic, t));
+    window._privoraTokenVault = Array.from(map.values()).slice(-200);
+
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      try {
+        chrome.storage.local.set({ privora_token_vault: window._privoraTokenVault });
+        chrome.runtime.sendMessage({ type: 'STORE_TOKEN_VAULT', tokens: newTokens }, () => {});
+      } catch (e) {}
+    }
+  }
+
+  syncTokenVaultFromStorage();
+
+  // -------------------------------------------------------------
   // 9a. Compact Non-Intrusive Floating Text Interception Prompt
   // -------------------------------------------------------------
   function showTextInterceptionPrompt(target, hits, originalText) {
@@ -3907,9 +4044,12 @@
       </div>
 
       <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
-        <button id="btn-text-prompt-redact" style="flex:1; background:#212529; color:#fff; border:none; border-radius:10px; padding:9px 12px; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px; box-shadow:0 2px 4px rgba(0,0,0,0.1);">
-          <span>🔒</span>
-          <span>Redact & Paste</span>
+        <button id="btn-text-prompt-tokenize" style="flex:1; background:linear-gradient(135deg, #0284c7, #06b6d4); color:#fff; border:none; border-radius:10px; padding:9px 12px; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px; box-shadow:0 2px 6px rgba(2,132,199,0.3);">
+          <span>🎭</span>
+          <span>Tokenize (Auto-Restore)</span>
+        </button>
+        <button id="btn-text-prompt-redact" style="background:#212529; color:#fff; border:none; border-radius:10px; padding:9px 12px; font-size:11px; font-weight:600; cursor:pointer;">
+          Mask
         </button>
         <button id="btn-text-prompt-editor" style="background:#FAF9F6; color:#212529; border:1px solid rgba(0,0,0,0.12); border-radius:10px; padding:9px 12px; font-size:11px; font-weight:600; cursor:pointer;" title="Open full review dialog">
           Review...
@@ -3950,10 +4090,40 @@
       }
     };
 
+    const btnTokenize = promptCard.querySelector('#btn-text-prompt-tokenize');
     const btnRedact = promptCard.querySelector('#btn-text-prompt-redact');
     const btnEditor = promptCard.querySelector('#btn-text-prompt-editor');
     const btnAllow = promptCard.querySelector('#btn-text-prompt-allow');
     const btnClose = promptCard.querySelector('#btn-text-prompt-close');
+
+    if (btnTokenize) {
+      btnTokenize.onclick = () => {
+        promptCard.remove();
+        activePrompt = null;
+        let tokenized = originalText;
+        const newTokens = [];
+        hits.forEach(h => {
+          const syn = generateSyntheticTokenForFinding(h);
+          tokenized = tokenized.split(h.value).join(syn);
+          newTokens.push({
+            id: 'tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+            type: h.type,
+            original: h.value,
+            synthetic: syn,
+            originHost: window.location.hostname,
+            createdAt: Date.now()
+          });
+        });
+        saveTokensToVault(newTokens);
+        insertText(tokenized);
+        showPrivoraHud({
+          type: 'success',
+          title: 'Privora Shield · Reversible Tokenization',
+          subtitle: `Protected ${hits.length} PII item(s) with format-preserving tokens. Responses will auto-decrypt.`,
+          durationMs: 4000
+        });
+      };
+    }
 
     if (btnRedact) {
       btnRedact.onclick = () => {
@@ -4048,10 +4218,13 @@
       </p>
       <div id="aegis-text-hits" style="max-height:160px; overflow-y:auto; display:flex; flex-direction:column; gap:8px;"></div>
       <div style="display:flex; flex-direction:column; gap:8px; border-top:1px solid #1e293b; padding-top:14px;">
-        <button id="btn-text-redact" style="background:linear-gradient(135deg, #06b6d4, #10b981); color:#020617; border:none; border-radius:12px; padding:12px; font-weight:800; font-size:13px; cursor:pointer;">
-          🔒 Redact Sensitive Values & Paste
+        <button id="btn-text-tokenize-modal" style="background:linear-gradient(135deg, #0284c7, #06b6d4); color:#ffffff; border:none; border-radius:12px; padding:12px; font-weight:800; font-size:13px; cursor:pointer;">
+          🎭 Format-Preserving Tokenize & Auto-Restore
         </button>
-        <button id="btn-text-encrypt" style="background:#4f46e5; color:#ffffff; border:none; border-radius:12px; padding:12px; font-weight:800; font-size:13px; cursor:pointer;">
+        <button id="btn-text-redact" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:12px; padding:10px; font-weight:700; font-size:12px; cursor:pointer;">
+          🔒 Redact / Mask with [REDACTED]
+        </button>
+        <button id="btn-text-encrypt" style="background:#4f46e5; color:#ffffff; border:none; border-radius:12px; padding:10px; font-weight:700; font-size:12px; cursor:pointer;">
           🛡️ AES-256-GCM Encrypt & Paste
         </button>
         <div style="display:flex; gap:8px; margin-top:4px;">
@@ -4109,6 +4282,36 @@
         }
       }
     };
+
+    // Tokenize
+    const btnTokenizeModal = card.querySelector('#btn-text-tokenize-modal');
+    if (btnTokenizeModal) {
+      btnTokenizeModal.onclick = () => {
+        let tokenized = originalText;
+        const newTokens = [];
+        hits.forEach(h => {
+          const syn = generateSyntheticTokenForFinding(h);
+          tokenized = tokenized.split(h.value).join(syn);
+          newTokens.push({
+            id: 'tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+            type: h.type,
+            original: h.value,
+            synthetic: syn,
+            originHost: window.location.hostname,
+            createdAt: Date.now()
+          });
+        });
+        saveTokensToVault(newTokens);
+        insertText(tokenized);
+        overlay.remove();
+        showPrivoraHud({
+          type: 'success',
+          title: 'Privora Shield · Reversible Tokenization',
+          subtitle: `Protected ${hits.length} PII item(s) with format-preserving tokens. Responses will auto-decrypt.`,
+          durationMs: 4000
+        });
+      };
+    }
 
     // Redact
     card.querySelector('#btn-text-redact').onclick = () => {
@@ -4269,8 +4472,12 @@
           </p>
         </div>
         <div style="display:flex; align-items:center; gap:6px;">
-          <button id="aegis-inline-redact-btn" style="background:#0284c7; color:#fff; border:none; border-radius:6px; padding:5px 9px; font-size:11px; font-weight:bold; cursor:pointer;">
-            🔒 Redact
+          <button id="aegis-inline-tokenize-btn" style="background:linear-gradient(135deg, #0284c7, #06b6d4); color:#fff; border:none; border-radius:6px; padding:6px 11px; font-size:11px; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:4px; box-shadow:0 2px 6px rgba(2,132,199,0.35);">
+            <span>🎭</span>
+            <span>Tokenize (Auto-Restore)</span>
+          </button>
+          <button id="aegis-inline-redact-btn" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:6px; padding:5px 8px; font-size:11px; font-weight:600; cursor:pointer;">
+            🔒 Mask
           </button>
           <button id="aegis-inline-close-btn" style="background:#1e293b; color:#94a3b8; border:1px solid #334155; border-radius:6px; padding:5px 8px; font-size:11px; cursor:pointer;">
             ✕
@@ -4281,6 +4488,49 @@
       const closeBtn = warningBanner.querySelector('#aegis-inline-close-btn');
       if (closeBtn) {
         closeBtn.onclick = removeWarning;
+      }
+
+      const tokenizeBtn = warningBanner.querySelector('#aegis-inline-tokenize-btn');
+      if (tokenizeBtn) {
+        tokenizeBtn.onclick = () => {
+          let tokenized = currentText;
+          const newTokens = [];
+          hits.forEach(h => {
+            const syn = generateSyntheticTokenForFinding(h);
+            tokenized = tokenized.split(h.value).join(syn);
+            newTokens.push({
+              id: 'tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+              type: h.type,
+              original: h.value,
+              synthetic: syn,
+              originHost: window.location.hostname,
+              createdAt: Date.now()
+            });
+          });
+          saveTokensToVault(newTokens);
+
+          if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+            target.value = tokenized;
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+            target.dispatchEvent(new Event('change', { bubbles: true }));
+          } else if (target.isContentEditable) {
+            target.innerText = tokenized;
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            const parent = target.closest('[contenteditable="true"]');
+            if (parent) {
+              parent.innerText = tokenized;
+              parent.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          }
+          removeWarning();
+          showPrivoraHud({
+            type: 'success',
+            title: 'Privora Shield · Reversible Tokenization',
+            subtitle: `Replaced ${hits.length} PII item(s) with realistic synthetic tokens. Responses will auto-decrypt.`,
+            durationMs: 4000
+          });
+        };
       }
 
       const redactBtn = warningBanner.querySelector('#aegis-inline-redact-btn');
@@ -4378,10 +4628,138 @@
     document.addEventListener('keyup', handleLiveInput, true);
   }
 
-  // Initialize floating hub and live universal text interception on load
+  // -------------------------------------------------------------
+  // 12. Real-Time AI Response Auto-Decryption (DOM Scanner)
+  // -------------------------------------------------------------
+  function setupAiResponseAutoDecryption() {
+    function decryptElementText(element) {
+      if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
+      if (element.classList && (element.classList.contains('privora-hud-toast') || element.classList.contains('privora-decrypted-token'))) return;
+
+      const vault = window._privoraTokenVault || [];
+      if (vault.length === 0) return;
+
+      const fullText = element.textContent || '';
+      const matchingTokens = vault.filter(t => t.synthetic && fullText.includes(t.synthetic));
+      if (matchingTokens.length === 0) return;
+
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+      let textNode;
+      const replacements = [];
+
+      while ((textNode = walker.nextNode())) {
+        const val = textNode.nodeValue;
+        if (!val) continue;
+
+        for (const tok of matchingTokens) {
+          if (val.includes(tok.synthetic)) {
+            replacements.push({ textNode, tok });
+            break;
+          }
+        }
+      }
+
+      for (const { textNode, tok } of replacements) {
+        const parent = textNode.parentNode;
+        if (!parent || (parent.classList && parent.classList.contains('privora-decrypted-token'))) continue;
+
+        const val = textNode.nodeValue;
+        const parts = val.split(tok.synthetic);
+        const frag = document.createDocumentFragment();
+
+        parts.forEach((part, idx) => {
+          if (part) frag.appendChild(document.createTextNode(part));
+          if (idx < parts.length - 1) {
+            const span = document.createElement('span');
+            span.className = 'privora-decrypted-token';
+            span.setAttribute('data-privora-synthetic', tok.synthetic);
+            span.setAttribute('data-privora-real', tok.original);
+            span.title = `Privora: Real ${tok.type} auto-decrypted from AI synthetic token (${tok.synthetic})`;
+            span.style.cssText = `
+              border-bottom: 2px solid #10b981;
+              background: rgba(16, 185, 129, 0.12);
+              padding: 1px 6px;
+              border-radius: 4px;
+              color: #059669;
+              font-weight: 600;
+              display: inline-flex;
+              align-items: center;
+              gap: 4px;
+              cursor: pointer;
+              transition: all 0.2s ease;
+            `;
+            span.innerHTML = `<span>${tok.original}</span><span style="font-size:9px; background:#065f46; color:#a7f3d0; padding:1px 5px; border-radius:9999px; font-family:monospace; font-weight:700;">🔒 DECRYPTED</span>`;
+            frag.appendChild(span);
+          }
+        });
+
+        try {
+          parent.replaceChild(frag, textNode);
+        } catch (e) {}
+      }
+    }
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mut of mutations) {
+        for (const added of mut.addedNodes) {
+          if (added.nodeType === Node.ELEMENT_NODE) {
+            decryptElementText(added);
+          }
+        }
+      }
+    });
+
+    observer.observe(document.body || document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+
+    setInterval(() => {
+      const vault = window._privoraTokenVault || [];
+      if (vault.length === 0) return;
+      const candidates = document.querySelectorAll('[data-message-author-role="assistant"], .markdown, .prose, article, p, div.message');
+      candidates.forEach(c => decryptElementText(c));
+    }, 1500);
+  }
+
+  // -------------------------------------------------------------
+  // 13. Reversible Clipboard Copy Decryption
+  // -------------------------------------------------------------
+  document.addEventListener('copy', (e) => {
+    const vault = window._privoraTokenVault || [];
+    if (vault.length === 0) return;
+
+    const selection = window.getSelection()?.toString();
+    if (!selection || selection.length < 3) return;
+
+    let restored = selection;
+    let hitCount = 0;
+    for (const tok of vault) {
+      if (tok.synthetic && restored.includes(tok.synthetic)) {
+        restored = restored.split(tok.synthetic).join(tok.original);
+        hitCount++;
+      }
+    }
+
+    if (hitCount > 0) {
+      if (e.clipboardData) {
+        e.clipboardData.setData('text/plain', restored);
+        e.preventDefault();
+        showPrivoraHud({
+          type: 'success',
+          title: 'Privora Shield · Clipboard Restored',
+          subtitle: `Restored ${hitCount} real value(s) in copied text without token placeholders.`,
+          durationMs: 3000
+        });
+      }
+    }
+  }, true);
+
+  // Initialize floating hub, live text interception, and AI auto-decryption on load
   setTimeout(() => {
     updateFloatingHub();
     setupLiveTextInterception();
+    setupAiResponseAutoDecryption();
     console.log(`[Privora Shield] Active on ${window.location.hostname || 'page'}`);
   }, 800);
 
