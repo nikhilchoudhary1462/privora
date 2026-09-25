@@ -30,7 +30,8 @@ import {
   Activity,
   LayoutTemplate,
   Sliders,
-  Layers
+  Layers,
+  Play
 } from 'lucide-react';
 import { ThreeStudioModel } from './ThreeStudioModel';
 import { 
@@ -114,6 +115,8 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
   const [canvasCursor, setCanvasCursor] = useState<string>('crosshair');
   const [sidePanelTab, setSidePanelTab] = useState<'uploads' | 'templates' | 'redaction' | 'synthetic' | 'ai' | 'export'>('uploads');
   const [isSidePanelOpen, setIsSidePanelOpen] = useState<boolean>(true);
+  const [emptyStageTab, setEmptyStageTab] = useState<'video' | '3d'>('video');
+  const [isVideoModalOpen, setIsVideoModalOpen] = useState<boolean>(false);
 
   // Detect WebGPU hardware acceleration capabilities on mount
   useEffect(() => {
@@ -1479,7 +1482,7 @@ console.log("Starting secure daemon...");`;
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto font-sans">
+    <div className="space-y-6 w-full font-sans">
       {/* 🚀 Live Hardware & Zero-Egress Telemetry Bar */}
       <TelemetryBar
         hardwareInfo={aiHardwareInfo}
@@ -1570,6 +1573,14 @@ console.log("Starting secure daemon...");`;
 
         {/* Quick Action CTA */}
         <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => setIsVideoModalOpen(true)}
+            className="px-3.5 py-2 bg-[#9C8DD4]/15 hover:bg-[#9C8DD4]/25 text-[#6D5BA8] text-xs font-semibold rounded-full border border-[#9C8DD4]/30 shadow-minimal transition-all flex items-center gap-1.5 cursor-pointer"
+            title="Watch live project demonstration video"
+          >
+            <Play className="w-3.5 h-3.5 fill-[#6D5BA8]" />
+            <span>Watch Demo</span>
+          </button>
           {currentFile && (
             <button
               onClick={() => {
@@ -2412,14 +2423,61 @@ console.log("Starting secure daemon...");`;
                 </p>
               </div>
             ) : (
-              /* When NO file is loaded: 3D Holographic Privacy Core & Visual Gallery */
-              <div className="w-full max-w-2xl text-center space-y-6 py-6">
-                {/* 3D Three.js Model */}
-                <ThreeStudioModel className="w-full h-56 sm:h-64" badgeText="Interactive 3D Cryptographic Sandbox" />
+              /* When NO file is loaded: Working Video Demo & 3D Sandbox */
+              <div className="w-full max-w-3xl text-center space-y-5 py-4">
+                
+                {/* Switcher Pill: Video Demo vs 3D Model */}
+                <div className="inline-flex items-center p-1 bg-[#FAF9F6] border border-black/5 rounded-full shadow-inner">
+                  <button
+                    onClick={() => setEmptyStageTab('video')}
+                    className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                      emptyStageTab === 'video'
+                        ? 'bg-white text-[#212529] shadow-minimal border border-black/5'
+                        : 'text-[#757575] hover:text-[#212529]'
+                    }`}
+                  >
+                    <Play className="w-3.5 h-3.5 fill-[#9C8DD4] text-[#9C8DD4]" />
+                    <span>Watch Working Demo</span>
+                  </button>
+                  <button
+                    onClick={() => setEmptyStageTab('3d')}
+                    className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                      emptyStageTab === '3d'
+                        ? 'bg-white text-[#212529] shadow-minimal border border-black/5'
+                        : 'text-[#757575] hover:text-[#212529]'
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-[#9C8DD4]" />
+                    <span>3D Cryptographic Core</span>
+                  </button>
+                </div>
+
+                {/* Display either the video player or 3D sandbox */}
+                {emptyStageTab === 'video' ? (
+                  <div className="relative w-full rounded-3xl overflow-hidden shadow-minimal border border-black/5 bg-black/95 aspect-video max-h-[380px] flex items-center justify-center group mx-auto">
+                    <video
+                      src="/working.mp4"
+                      controls
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                      className="w-full h-full object-contain rounded-3xl"
+                    />
+                    <div className="absolute top-3 left-3 pointer-events-none">
+                      <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold bg-black/60 backdrop-blur-md text-white border border-white/20 flex items-center gap-1.5 shadow-minimal">
+                        <span className="w-2 h-2 rounded-full bg-[#4ADE80] animate-pulse" />
+                        Privora In Action · On-Device Zero Egress
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <ThreeStudioModel className="w-full h-56 sm:h-64" badgeText="Interactive 3D Cryptographic Sandbox" />
+                )}
 
                 <div className="space-y-1.5">
                   <h3 className="text-lg font-bold text-[#212529] tracking-tight">
-                    Welcome to the On-Device Privacy Studio
+                    On-Device Neural Redaction & Envelope Cryptography
                   </h3>
                   <p className="text-xs text-[#757575] max-w-md mx-auto">
                     Upload your own photo or document below, or select a pre-loaded benchmark scenario from the left tool panel to visually redact and cryptographically protect.
@@ -2537,6 +2595,54 @@ console.log("Starting secure daemon...");`;
           <p className="text-[11px] text-[#757575]">Zero False Positive Checksums</p>
         </div>
       </div>
+
+      {/* 🎬 Working Demo Video Modal */}
+      {isVideoModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white border border-black/10 rounded-3xl max-w-4xl w-full p-5 sm:p-6 text-[#212529] shadow-2xl relative space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-black/5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-[#9C8DD4]/15 border border-[#9C8DD4]/30 flex items-center justify-center text-[#7C6CB0]">
+                  <Play className="w-4 h-4 fill-[#7C6CB0]" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-[#212529]">Privora Live Working Demonstration</h3>
+                  <p className="text-xs text-[#757575]">Watch 100% on-device neural redaction, checksum verification, and AES-256 encryption</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsVideoModalOpen(false)}
+                className="text-[#757575] hover:text-[#212529] p-2 rounded-xl hover:bg-black/5 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-black/10 shadow-inner">
+              <video
+                src="/working.mp4"
+                controls
+                autoPlay
+                className="w-full h-full object-contain"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1 text-xs text-[#757575]">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[#16A34A]" />
+                <span className="font-medium text-[#212529]">Local Self-Contained Video</span>
+                <span>· No streaming server or third-party telemetry</span>
+              </div>
+              <button
+                onClick={() => setIsVideoModalOpen(false)}
+                className="px-5 py-2 rounded-xl bg-[#E2E1E6] hover:bg-black/10 text-[#212529] font-semibold transition-colors cursor-pointer"
+              >
+                Close Video
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

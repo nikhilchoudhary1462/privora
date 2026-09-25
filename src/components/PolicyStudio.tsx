@@ -92,7 +92,7 @@ export const PolicyStudio: React.FC = () => {
   ];
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto font-sans">
+    <div className="space-y-6 w-full font-sans">
       
       {/* Header Banner */}
       <div className="p-5 rounded-2xl bg-white border border-black/5 flex flex-wrap items-center justify-between gap-4 shadow-minimal">

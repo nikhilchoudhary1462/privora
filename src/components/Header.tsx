@@ -36,7 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   return (
     <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#F1F3F5]/85 border-b border-black/5 px-4 lg:px-8 py-2.5 transition-all">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+      <div className="w-full flex items-center justify-between gap-3">
         
         {/* Brand Logo & Tag */}
         <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => setActiveTab('landing')}>

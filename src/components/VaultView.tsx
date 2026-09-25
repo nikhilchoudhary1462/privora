@@ -1056,7 +1056,7 @@ export const VaultView: React.FC<VaultViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto font-sans">
+    <div className="space-y-6 w-full font-sans">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 p-5 rounded-2xl bg-white border border-black/5 shadow-minimal">
         <div>

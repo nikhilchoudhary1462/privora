@@ -17,6 +17,7 @@ build/
 # Large zip archives & temp files
 *.zip
 *.tar.gz
+/working.mp4
 
 # Testing & coverage
 coverage/

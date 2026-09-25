@@ -61,7 +61,7 @@ export function App() {
           onNavigateTab={(tab) => setActiveTab(tab)}
         />
       ) : (
-        <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
           {activeTab === 'scan' && (
             <ScanStudio
               session={session}
@@ -99,7 +99,7 @@ export function App() {
 
       {/* Modern Light Footer */}
       <footer className="border-t border-black/5 py-4 px-6 text-center text-xs text-[#757575] bg-[#FAF9F6]/80 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+        <div className="w-full flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-[#212529]">Privora v2.2</span>
             <span className="text-black/20">·</span>
