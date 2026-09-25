@@ -470,25 +470,6 @@ export class RegexDetector {
       }
     }
 
-    // 12b. Candidate / Individual Name Context (e.g. "candidate Tanvi Rao submitted", "applicant Pooja Nair has")
-    const candidateRegex = /(?:candidate|applicant|employee|patient|client|user)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,3})(?=\s+(?:submitted|applied|verified|registered|with|has|is|was|[,\.\n\r;]|$))/gi;
-    while ((match = candidateRegex.exec(text)) !== null) {
-      const val = match[1]?.trim();
-      if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender|Candidate|Applicant)$/i.test(val)) {
-        if (!results.some(r => r.type === 'NAME' && r.value === val)) {
-          results.push({
-            id: `pii_name_${idCounter++}`,
-            type: 'NAME',
-            label: 'Candidate Name',
-            value: val,
-            confidence: 0.94,
-            complianceTags: ['DPDP_INDIA', 'GDPR'],
-            recommendation: 'Individual legal identity name subject to DPDP & GDPR privacy safeguards.',
-          });
-        }
-      }
-    }
-
     // 13. Guardian / Relative (Father's Name, Husband's Name, C/O, S/O, D/O, W/O)
     const guardianRegex = /(?:(?:Father's Name|Care of|C\/O|S\/O|D\/O|W\/O|पिता\s*का\s*नाम|पति\s*का\s*नाम)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
     while ((match = guardianRegex.exec(text)) !== null) {
