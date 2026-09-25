@@ -335,7 +335,7 @@
     }
 
     // 2. Aadhaar UID (matches valid Verhoeff, formatted 4-4-4, or context-prefixed 12-digit IDs)
-    const aadhaarRegex = /(?:(?:Aadhaar|Aadhar|UID|UIDAI|आधार)\s*[:\-\s#]*\s*)?\b([2-9]\d{3}[\s\-\.]*\d{4}[\s\-\.]*\d{4})\b/gi;
+    const aadhaarRegex = /(?:(?:government\s*registry\s*(?:record)?\s*(?:number)?|Aadhaar|Aadhar|UID|UIDAI|आधार)\s*[:\-\s#]*\s*)?\b([2-9]\d{3}[\s\-\.]*\d{4}[\s\-\.]*\d{4})\b/gi;
     const seenAadhaar = new Set();
     while ((match = aadhaarRegex.exec(text)) !== null) {
       const val = match[1]?.trim();
@@ -345,7 +345,7 @@
         seenAadhaar.add(raw);
         const isVerhoeff = validateVerhoeff(raw);
         const isFormatted = /^[2-9]\d{3}[\s\-\.]+\d{4}[\s\-\.]+\d{4}$/.test(val);
-        const hasKeyword = /Aadhaar|Aadhar|UID|UIDAI|आधार/i.test(match[0]);
+        const hasKeyword = /government\s*registry|Aadhaar|Aadhar|UID|UIDAI|आधार/i.test(match[0]);
 
         if (isVerhoeff || isFormatted || hasKeyword) {
           results.push({
@@ -442,6 +442,17 @@
       const val = match[1]?.trim();
       if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender)$/i.test(val)) {
         results.push({ type: 'NAME', label: 'Full Name / Demographic', value: val });
+      }
+    }
+
+    // 10b. Candidate / Individual Name Context (e.g. "candidate Tanvi Rao submitted", "applicant Pooja Nair has")
+    const candidateRegex = /(?:candidate|applicant|employee|patient|client|user)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,3})(?=\s+(?:submitted|applied|verified|registered|with|has|is|was|[,\.\n\r;]|$))/gi;
+    while ((match = candidateRegex.exec(text)) !== null) {
+      const val = match[1]?.trim();
+      if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender|Candidate|Applicant)$/i.test(val)) {
+        if (!results.some(r => r.type === 'NAME' && r.value === val)) {
+          results.push({ type: 'NAME', label: 'Candidate Name', value: val });
+        }
       }
     }
 
@@ -1563,16 +1574,18 @@
               }
             });
 
-            // Also check for faces on this page canvas (ignore fixed card template boxes on PDF documents)
-            const visualBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name).filter(v => v.label === 'Face Photo');
-            visualBoxes.forEach(vBox => {
-              const isOverlapping = pageBoxes.some(pBox => 
-                Math.abs(pBox.x - vBox.x) < 40 && Math.abs(pBox.y - vBox.y) < 40
-              );
-              if (!isOverlapping) {
-                pageBoxes.push(vBox);
-              }
-            });
+            // Only run heavy pixel-level face detection on Page 1 (IDs, passports, resumes) to eliminate freeze on 27-page docs
+            if (pNum === 1) {
+              const visualBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name).filter(v => v.label === 'Face Photo');
+              visualBoxes.forEach(vBox => {
+                const isOverlapping = pageBoxes.some(pBox => 
+                  Math.abs(pBox.x - vBox.x) < 40 && Math.abs(pBox.y - vBox.y) < 40
+                );
+                if (!isOverlapping) {
+                  pageBoxes.push(vBox);
+                }
+              });
+            }
 
             // 1. Extract unblurred slices for retrace/decryption BEFORE drawing privacy masks
             pageBoxes.forEach(box => {
@@ -2363,87 +2376,93 @@
     // Load File (PDF, Image, or Text Document) into Preview Canvas
     baseImage = new Image();
 
-    if (isPdf && preloadedPdfPages && preloadedPdfPages.length > 0) {
-      pdfPages = preloadedPdfPages;
-    } else if (isPdf) {
-      const { pdfLib, workerLib } = ensurePdfWorkerHandler();
+    if (isPdf) {
+      if (preloadedPdfPages && preloadedPdfPages.length > 0) {
+        pdfPages = preloadedPdfPages;
+      } else {
+        const { pdfLib, workerLib } = ensurePdfWorkerHandler();
 
-      if (pdfLib) {
-        try {
-          const arrayBuffer = await file.arrayBuffer();
-          const loadingTask = pdfLib.getDocument({
-            data: new Uint8Array(arrayBuffer),
-            useSystemFonts: true,
-          });
-          const pdfDoc = await loadingTask.promise;
-          const totalPages = Math.max(1, pdfDoc.numPages);
+        if (pdfLib) {
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const loadingTask = pdfLib.getDocument({
+              data: new Uint8Array(arrayBuffer),
+              useSystemFonts: true,
+            });
+            const pdfDoc = await loadingTask.promise;
+            const totalPages = Math.max(1, pdfDoc.numPages);
 
-          for (let pNum = 1; pNum <= totalPages; pNum++) {
-            const page = await pdfDoc.getPage(pNum);
-            const viewport = page.getViewport({ scale: 1.5 });
-            const pCanvas = document.createElement('canvas');
-            pCanvas.width = Math.round(viewport.width);
-            pCanvas.height = Math.round(viewport.height);
-            const pCtx = pCanvas.getContext('2d');
+            for (let pNum = 1; pNum <= totalPages; pNum++) {
+              const page = await pdfDoc.getPage(pNum);
+              const viewport = page.getViewport({ scale: 1.5 });
+              const pCanvas = document.createElement('canvas');
+              pCanvas.width = Math.round(viewport.width);
+              pCanvas.height = Math.round(viewport.height);
+              const pCtx = pCanvas.getContext('2d');
 
-            // Ensure crisp opaque white paper background
-            pCtx.fillStyle = '#FFFFFF';
-            pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
+              // Ensure crisp opaque white paper background
+              pCtx.fillStyle = '#FFFFFF';
+              pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
 
-            await page.render({
-              canvasContext: pCtx,
-              viewport: viewport,
-            }).promise;
+              await page.render({
+                canvasContext: pCtx,
+                viewport: viewport,
+              }).promise;
 
-            const textContent = await page.getTextContent();
-            const rawItems = (textContent.items || []).filter(i => i && typeof i.str === 'string' && i.str.length > 0);
+              const textContent = await page.getTextContent();
+              const rawItems = (textContent.items || []).filter(i => i && typeof i.str === 'string' && i.str.length > 0);
 
-            let pageText = '';
-            let lastY = null;
-            for (const item of rawItems) {
-              const curY = item.transform ? item.transform[5] : null;
-              if (lastY !== null && curY !== null && Math.abs(curY - lastY) > 5) {
-                pageText += '\n' + item.str;
-              } else {
-                pageText += (pageText.length > 0 && !pageText.endsWith('\n') ? ' ' : '') + item.str;
+              let pageText = '';
+              let lastY = null;
+              for (const item of rawItems) {
+                const curY = item.transform ? item.transform[5] : null;
+                if (lastY !== null && curY !== null && Math.abs(curY - lastY) > 5) {
+                  pageText += '\n' + item.str;
+                } else {
+                  pageText += (pageText.length > 0 && !pageText.endsWith('\n') ? ' ' : '') + item.str;
+                }
+                if (curY !== null) lastY = curY;
               }
-              if (curY !== null) lastY = curY;
+
+              const piiItems = scanText(pageText);
+              const pageBoxes = [];
+
+              // Line-constrained tight bounding box mapping
+              piiItems.forEach(finding => {
+                const matchedBox = findBoundingBoxForFinding(finding, rawItems, pCanvas.width, pCanvas.height);
+                if (matchedBox) {
+                  pageBoxes.push(matchedBox);
+                }
+              });
+
+              pdfPages.push({
+                pageNum: pNum,
+                pageDataUrl: pCanvas.toDataURL('image/jpeg', 0.85),
+                width: Math.round(viewport.width),
+                height: Math.round(viewport.height),
+                text: pageText,
+                boxes: pageBoxes,
+                detectedPii: piiItems
+              });
+
+              // Reclaim pCanvas memory immediately
+              pCanvas.width = 0;
+              pCanvas.height = 0;
             }
-
-            const piiItems = scanText(pageText);
-            const pageBoxes = [];
-
-            // Line-constrained tight bounding box mapping
-            piiItems.forEach(finding => {
-              const matchedBox = findBoundingBoxForFinding(finding, rawItems, pCanvas.width, pCanvas.height);
-              if (matchedBox) {
-                pageBoxes.push(matchedBox);
-              }
-            });
-
-            pdfPages.push({
-              pageNum: pNum,
-              pageDataUrl: pCanvas.toDataURL('image/jpeg', 0.85),
-              width: Math.round(viewport.width),
-              height: Math.round(viewport.height),
-              text: pageText,
-              boxes: pageBoxes,
-              detectedPii: piiItems
-            });
-
-            // Reclaim pCanvas memory immediately
-            pCanvas.width = 0;
-            pCanvas.height = 0;
+          } catch (pdfErr) {
+            console.warn('PDF.js in-extension error:', pdfErr);
           }
-        } catch (pdfErr) {
-          console.warn('PDF.js in-extension error:', pdfErr);
         }
       }
 
       if (pdfPages.length > 0) {
-        currentBoxes = [...pdfPages[0].boxes];
-        canvas.width = pdfPages[0].width || (pdfPages[0].canvas ? pdfPages[0].canvas.width : 800);
-        canvas.height = pdfPages[0].height || (pdfPages[0].canvas ? pdfPages[0].canvas.height : 1000);
+        // Find first page with detected PII boxes, or default to page 0
+        const firstPiiPageIdx = pdfPages.findIndex(p => p.boxes && p.boxes.length > 0);
+        currentPdfPageIdx = firstPiiPageIdx >= 0 ? firstPiiPageIdx : 0;
+        currentBoxes = [...(pdfPages[currentPdfPageIdx].boxes || [])];
+        const initialP = pdfPages[currentPdfPageIdx];
+        canvas.width = initialP.width || (initialP.canvas ? initialP.canvas.width : 800);
+        canvas.height = initialP.height || (initialP.canvas ? initialP.canvas.height : 1000);
         await new Promise((resolve) => {
           baseImage.onload = () => {
             renderCanvas();
@@ -2453,7 +2472,7 @@
             renderCanvas();
             resolve();
           };
-          baseImage.src = pdfPages[0].pageDataUrl;
+          baseImage.src = initialP.pageDataUrl;
         });
 
         // Add Multi-Page Navigation Bar to QuickBar if multi-page PDF
@@ -2466,7 +2485,7 @@
             if (targetIdx < 0 || targetIdx >= pdfPages.length) return;
             pdfPages[currentPdfPageIdx].boxes = [...currentBoxes];
             currentPdfPageIdx = targetIdx;
-            currentBoxes = [...pdfPages[targetIdx].boxes];
+            currentBoxes = [...(pdfPages[targetIdx].boxes || [])];
             const p = pdfPages[targetIdx];
             canvas.width = p.width || (p.canvas ? p.canvas.width : 800);
             canvas.height = p.height || (p.canvas ? p.canvas.height : 1000);

@@ -130,7 +130,7 @@ export class PdfProcessor {
         });
       });
 
-      const pageDataUrl = canvas.toDataURL('image/png');
+      const pageDataUrl = canvas.toDataURL('image/jpeg', 0.85);
       pages.push({
         pageNumber: pageNum,
         pageImageDataUrl: pageDataUrl,
@@ -187,30 +187,8 @@ export class PdfProcessor {
     let format: 'JPEG' | 'PNG' = 'JPEG';
 
     if (typeof canvas === 'string') {
-      if (canvas.startsWith('data:image/png') && typeof document !== 'undefined') {
-        try {
-          const tempC = document.createElement('canvas');
-          tempC.width = widthPx;
-          tempC.height = heightPx;
-          const ctx = tempC.getContext('2d');
-          if (ctx) {
-            const img = new Image();
-            img.src = canvas;
-            ctx.drawImage(img, 0, 0);
-            imgData = tempC.toDataURL('image/jpeg', 0.85);
-            format = 'JPEG';
-          } else {
-            imgData = canvas;
-            format = 'PNG';
-          }
-        } catch {
-          imgData = canvas;
-          format = 'PNG';
-        }
-      } else {
-        imgData = canvas;
-        format = canvas.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-      }
+      imgData = canvas;
+      format = canvas.startsWith('data:image/png') ? 'PNG' : 'JPEG';
     } else {
       imgData = canvas.toDataURL('image/jpeg', 0.85);
       format = 'JPEG';
@@ -249,30 +227,8 @@ export class PdfProcessor {
       let format: 'JPEG' | 'PNG' = 'JPEG';
 
       if (typeof p.canvas === 'string') {
-        if (p.canvas.startsWith('data:image/png') && typeof document !== 'undefined') {
-          try {
-            const tempC = document.createElement('canvas');
-            tempC.width = p.width;
-            tempC.height = p.height;
-            const ctx = tempC.getContext('2d');
-            if (ctx) {
-              const img = new Image();
-              img.src = p.canvas;
-              ctx.drawImage(img, 0, 0);
-              imgData = tempC.toDataURL('image/jpeg', 0.85);
-              format = 'JPEG';
-            } else {
-              imgData = p.canvas;
-              format = 'PNG';
-            }
-          } catch {
-            imgData = p.canvas;
-            format = 'PNG';
-          }
-        } else {
-          imgData = p.canvas;
-          format = p.canvas.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-        }
+        imgData = p.canvas;
+        format = p.canvas.startsWith('data:image/png') ? 'PNG' : 'JPEG';
       } else {
         imgData = p.canvas.toDataURL('image/jpeg', 0.85);
         format = 'JPEG';

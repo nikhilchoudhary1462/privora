@@ -1148,7 +1148,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
               syntheticMappings
             );
 
-            syntheticDataUrl = synCanvas.toDataURL('image/png');
+            syntheticDataUrl = synCanvas.toDataURL('image/jpeg', 0.85);
             if (isOriginalPdf && detection.pages && detection.pages.length > 1) {
               const maskedPages: { canvas: HTMLCanvasElement; width: number; height: number }[] = [];
               for (const page of detection.pages) {
@@ -1171,7 +1171,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
                 maskedPages.push({ canvas: pageCanvas, width: pageCanvas.width, height: pageCanvas.height });
               }
               syntheticBlob = PdfProcessor.exportMultiPagePdf(maskedPages);
-              syntheticDataUrl = maskedPages[0].canvas.toDataURL('image/png');
+              syntheticDataUrl = maskedPages[0].canvas.toDataURL('image/jpeg', 0.85);
             } else if (isOriginalPdf) {
               syntheticBlob = PdfProcessor.canvasToPdfBlob(syntheticDataUrl, synCanvas.width, synCanvas.height);
             } else {
@@ -1404,11 +1404,13 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
                 });
 
                 // Encrypt regions on this page canvas and obtain masked image with crisp JPEG compression (avoids 130MB PNG bloat)
-                const { maskedImageDataUrl, encryptedRegionRecords } = await CryptoEngine.encryptImageRegions(pageCanvas, pageRegions, dek, 'image/jpeg', 0.88);
+                const { maskedImageDataUrl, encryptedRegionRecords } = await CryptoEngine.encryptImageRegions(pageCanvas, pageRegions, dek, 'image/jpeg', 0.85);
                 encryptedRegionRecords.forEach(r => {
                   allRegionRecords.push({ ...r, pageNumber: page.pageNumber });
                 });
                 maskedPageDataUrl = maskedImageDataUrl;
+              } else {
+                maskedPageDataUrl = pageCanvas.toDataURL('image/jpeg', 0.85);
               }
 
               maskedPages.push({ canvas: maskedPageDataUrl, width: pageCanvas.width, height: pageCanvas.height });
