@@ -51,6 +51,20 @@ export function isValidHandshakePayload(value: unknown): value is P2PHandshakePa
   );
 }
 
+// Helper to prune redundant candidates from SDP to make QR codes significantly lighter & easier to scan
+export function pruneSdpForQr(sdp: string): string {
+  return sdp
+    .split(/\r?\n/)
+    .filter(line => {
+      // Remove dummy TCP candidates (e.g. port 9 tcptype passive/active) that bloat QR codes
+      if (line.startsWith('a=candidate:') && (line.includes(' typ tcp ') || line.includes(' tcptype '))) {
+        return false;
+      }
+      return true;
+    })
+    .join('\r\n');
+}
+
 export class P2PTransport {
   private pc: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
@@ -96,10 +110,12 @@ export class P2PTransport {
     // Wait for Vanilla ICE gathering to complete so all candidates are in one payload
     await this.waitForIceGatheringComplete(this.pc);
 
+    const sdpClean = pruneSdpForQr(this.pc.localDescription!.sdp);
+
     const payload: P2PHandshakePayload = {
       version: 1,
       type: 'OFFER',
-      sdp: this.pc.localDescription!.sdp,
+      sdp: sdpClean,
       publicKeyB64,
       fingerprint,
     };
@@ -108,7 +124,7 @@ export class P2PTransport {
     const qrDataUrl = await QRCode.toDataURL(payloadJson, {
       errorCorrectionLevel: 'L',
       margin: 2,
-      scale: 4,
+      scale: 6,
     });
 
     this.onStatusChange?.('Vanilla ICE Offer generated. Displaying QR code for recipient...');
@@ -165,10 +181,12 @@ export class P2PTransport {
     // Wait for Vanilla ICE gathering
     await this.waitForIceGatheringComplete(this.pc);
 
+    const sdpClean = pruneSdpForQr(this.pc.localDescription!.sdp);
+
     const answerPayload: P2PHandshakePayload = {
       version: 1,
       type: 'ANSWER',
-      sdp: this.pc.localDescription!.sdp,
+      sdp: sdpClean,
       publicKeyB64: myPublicKeyB64,
       fingerprint,
     };
@@ -177,7 +195,7 @@ export class P2PTransport {
     const qrDataUrl = await QRCode.toDataURL(payloadJson, {
       errorCorrectionLevel: 'L',
       margin: 2,
-      scale: 4,
+      scale: 6,
     });
 
     this.onStatusChange?.('Answer created. Scan back with sender to open direct channel...');

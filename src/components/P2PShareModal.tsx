@@ -241,14 +241,78 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
   };
 
   // -------------------------------------------------------------
-  // 2. Camera QR Scanner loop using jsQR (Advanced Offline Mode)
+  // 2. Camera QR Scanner with Hardware Acceleration & Multi-Pass Fallback
   // -------------------------------------------------------------
+  const playScanBeep = () => {
+    try {
+      if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.15);
+      }
+    } catch (e) {}
+  };
+
+  const handleImageFileUpload = (file: File, onScanSuccess: (decoded: string) => void) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = async () => {
+        // Try BarcodeDetector first
+        if ('BarcodeDetector' in window) {
+          try {
+            const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+            const barcodes = await detector.detect(img);
+            if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+              playScanBeep();
+              onScanSuccess(barcodes[0].rawValue);
+              return;
+            }
+          } catch (e) {}
+        }
+
+        // Fallback to jsQR
+        const c = document.createElement('canvas');
+        c.width = img.width;
+        c.height = img.height;
+        const ctx = c.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          const data = ctx.getImageData(0, 0, c.width, c.height);
+          const code = jsQR(data.data, c.width, c.height);
+          if (code && code.data) {
+            playScanBeep();
+            onScanSuccess(code.data);
+            return;
+          }
+        }
+        setStatusMessage('Could not find a valid QR code in the uploaded image. Please try again or paste the token.');
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
   const startCameraScanner = async (onScanSuccess: (decoded: string) => void) => {
     try {
       stopCamera();
       setStatusMessage('Requesting camera access...');
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920, min: 640 },
+          height: { ideal: 1080, min: 480 },
+        },
       });
       cameraStreamRef.current = stream;
       setIsScanningCamera(true);
@@ -268,20 +332,91 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
         const scanCanvas = document.createElement('canvas');
         const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
 
-        const scanFrame = () => {
+        let barcodeDetector: any = null;
+        if ('BarcodeDetector' in window) {
+          try {
+            barcodeDetector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+          } catch (e) {
+            barcodeDetector = null;
+          }
+        }
+
+        let isAnalyzing = false;
+
+        const scanFrame = async () => {
           if (!cameraStreamRef.current) return;
-          if (video.readyState >= 2 && scanCtx && video.videoWidth > 0) {
-            scanCanvas.width = video.videoWidth;
-            scanCanvas.height = video.videoHeight;
-            scanCtx.drawImage(video, 0, 0);
-            const imgData = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
-            const code = jsQR(imgData.data, imgData.width, imgData.height);
-            if (code && code.data) {
-              stopCamera();
-              onScanSuccess(code.data);
-              return;
+          if (isAnalyzing) {
+            requestAnimationFrame(scanFrame);
+            return;
+          }
+
+          if (video.readyState >= 2 && video.videoWidth > 0) {
+            isAnalyzing = true;
+            try {
+              // 1. Native Hardware BarcodeDetector (instant on Android Chrome!)
+              if (barcodeDetector) {
+                try {
+                  const barcodes = await barcodeDetector.detect(video);
+                  if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                    const raw = barcodes[0].rawValue;
+                    stopCamera();
+                    playScanBeep();
+                    onScanSuccess(raw);
+                    return;
+                  }
+                } catch (e) {
+                  // Fall back to jsQR below
+                }
+              }
+
+              // 2. High-performance jsQR: Downsample to max 640px so mobile CPU doesn't choke
+              if (scanCtx) {
+                const maxDim = 640;
+                let targetW = video.videoWidth;
+                let targetH = video.videoHeight;
+                if (targetW > maxDim || targetH > maxDim) {
+                  if (targetW > targetH) {
+                    targetH = Math.round((targetH * maxDim) / targetW);
+                    targetW = maxDim;
+                  } else {
+                    targetW = Math.round((targetW * maxDim) / targetH);
+                    targetH = maxDim;
+                  }
+                }
+
+                scanCanvas.width = targetW;
+                scanCanvas.height = targetH;
+                scanCtx.drawImage(video, 0, 0, targetW, targetH);
+                const imgData = scanCtx.getImageData(0, 0, targetW, targetH);
+                let code = jsQR(imgData.data, targetW, targetH, {
+                  inversionAttempts: 'dontInvert',
+                });
+
+                // Center crop pass where the viewfinder crosshair sits
+                if (!code && targetW > 300 && targetH > 300) {
+                  const cropDim = Math.min(targetW, targetH, 360);
+                  const cropX = Math.round((targetW - cropDim) / 2);
+                  const cropY = Math.round((targetH - cropDim) / 2);
+                  const cropData = scanCtx.getImageData(cropX, cropY, cropDim, cropDim);
+                  code = jsQR(cropData.data, cropDim, cropDim, {
+                    inversionAttempts: 'attemptBoth',
+                  });
+                }
+
+                if (code && code.data) {
+                  stopCamera();
+                  playScanBeep();
+                  onScanSuccess(code.data);
+                  return;
+                }
+              }
+            } catch (err) {
+              console.warn('Scan frame processing error:', err);
+            } finally {
+              isAnalyzing = false;
             }
           }
+
           if (cameraStreamRef.current) {
             requestAnimationFrame(scanFrame);
           }
@@ -293,7 +428,7 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
       requestAnimationFrame(initVideo);
     } catch (err: any) {
       console.warn('Camera access unavailable:', err);
-      setStatusMessage(`Camera access denied or unavailable: ${err?.message || 'permission error'}. You can paste the token manually.`);
+      setStatusMessage(`Camera access denied or unavailable: ${err?.message || 'permission error'}. You can paste the token manually or upload a picture.`);
       setIsScanningCamera(false);
     }
   };
@@ -797,7 +932,16 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
                     </button>
                   </div>
 
-                  <img src={offerQr} alt="Offer QR" className="w-48 h-48 rounded-xl p-2 bg-white border border-slate-200 shadow-md" />
+                  <div className="flex flex-col items-center">
+                    <img 
+                      src={offerQr} 
+                      alt="Offer QR" 
+                      className="w-64 h-64 sm:w-80 sm:h-80 md:w-96 md:h-96 rounded-2xl p-4 bg-white border-2 border-indigo-300 shadow-xl mx-auto object-contain" 
+                    />
+                    <p className="text-[11px] font-mono text-slate-500 mt-2">
+                      💡 Point recipient camera directly at this QR code
+                    </p>
+                  </div>
 
                   <div className="w-full max-w-lg space-y-2">
                     <div className="flex items-center justify-between">
@@ -827,19 +971,39 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
                         Step 2: Scan or Paste Receiver's Answer Token:
                       </label>
                       {!isScanningCamera && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            startCameraScanner((decoded) => {
-                              setReceiverAnswerInput(decoded);
-                              handleFinalizeSenderTransfer(decoded);
-                            });
-                          }}
-                          className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                          <span>Scan Answer QR</span>
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <label className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              className="hidden"
+                              onChange={(e) => {
+                                if (e.target.files && e.target.files[0]) {
+                                  handleImageFileUpload(e.target.files[0], (decoded) => {
+                                    setReceiverAnswerInput(decoded);
+                                    handleFinalizeSenderTransfer(decoded);
+                                  });
+                                }
+                              }}
+                            />
+                            <Camera className="w-3.5 h-3.5" />
+                            <span>Photo</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              startCameraScanner((decoded) => {
+                                setReceiverAnswerInput(decoded);
+                                handleFinalizeSenderTransfer(decoded);
+                              });
+                            }}
+                            className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <Camera className="w-3.5 h-3.5" />
+                            <span>Live Scan</span>
+                          </button>
+                        </div>
                       )}
                     </div>
 
@@ -916,7 +1080,7 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
                       className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
                     >
                       <Camera className="w-3.5 h-3.5" />
-                      <span>Scan with Camera</span>
+                      <span>Live Camera</span>
                     </button>
                   )}
                 </div>
@@ -930,9 +1094,9 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
                       className="w-full h-full object-cover"
                     />
                     <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
-                      <div className="w-44 h-44 border-2 border-dashed border-white/90 rounded-2xl animate-pulse shadow-2xl" />
+                      <div className="w-48 h-48 border-2 border-dashed border-white/90 rounded-2xl animate-pulse shadow-2xl" />
                       <p className="text-[10px] font-mono text-white/90 bg-black/60 px-3 py-1 rounded-full mt-3 backdrop-blur-sm">
-                        Point camera at sender's QR code
+                        Point camera directly at laptop QR code
                       </p>
                     </div>
                     <button
@@ -945,19 +1109,40 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
                   </div>
                 ) : (
                   <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-3">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        startCameraScanner((decoded) => {
-                          setSenderOfferInput(decoded);
-                          handleProcessSenderOffer(decoded);
-                        });
-                      }}
-                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-indigo-500/20 transition-all cursor-pointer"
-                    >
-                      <Camera className="w-4 h-4" />
-                      <span>Open Camera to Scan QR Code</span>
-                    </button>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          startCameraScanner((decoded) => {
+                            setSenderOfferInput(decoded);
+                            handleProcessSenderOffer(decoded);
+                          });
+                        }}
+                        className="py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-indigo-500/20 transition-all cursor-pointer"
+                      >
+                        <Camera className="w-4 h-4" />
+                        <span>Live Camera Scan</span>
+                      </button>
+
+                      <label className="py-3 px-4 bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleImageFileUpload(e.target.files[0], (decoded) => {
+                                setSenderOfferInput(decoded);
+                                handleProcessSenderOffer(decoded);
+                              });
+                            }
+                          }}
+                        />
+                        <Camera className="w-4 h-4 text-indigo-600" />
+                        <span>Snap Photo / Pick Image</span>
+                      </label>
+                    </div>
 
                     <div className="flex items-center gap-2 justify-center text-[10px] text-slate-400 font-bold uppercase tracking-wider py-1">
                       <span className="h-px bg-slate-200 flex-1" />
@@ -987,11 +1172,15 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
                 <div className="flex flex-col items-center space-y-3 pt-3 border-t border-slate-200">
                   <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-center w-full max-w-lg">
                     <p className="text-xs font-bold text-indigo-900">
-                      Step 2: Copy this Answer Token and paste it into Step 2 on the Sender screen:
+                      Step 2: Show this Answer QR to sender (or copy token):
                     </p>
                   </div>
 
-                  <img src={answerQr} alt="Answer QR" className="w-48 h-48 rounded-xl p-2 bg-white border border-slate-200 shadow-md" />
+                  <img 
+                    src={answerQr} 
+                    alt="Answer QR" 
+                    className="w-64 h-64 sm:w-80 sm:h-80 md:w-96 md:h-96 rounded-2xl p-4 bg-white border-2 border-indigo-300 shadow-xl mx-auto object-contain" 
+                  />
 
                   <div className="w-full max-w-lg space-y-2">
                     <div className="flex items-center justify-between">
