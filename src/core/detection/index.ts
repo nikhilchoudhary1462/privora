@@ -152,7 +152,14 @@ export class MasterDetector {
               if (img.naturalWidth > 0) {
                 const { detectedItems: faceItems } = await FaceDetector.detectFaces(img);
                 faceItems.forEach((f, fIdx) => {
-                  const item = { ...f, id: `p${page.pageNumber}_face_${fIdx}`, pageNumber: page.pageNumber };
+                  const item: DetectedItem = {
+                    ...f,
+                    id: `p${page.pageNumber}_face_${fIdx}`,
+                    pageNumber: page.pageNumber,
+                    localizationState: 'EXACT',
+                    detectionConfidence: 'HIGH',
+                    boundingBoxes: f.boundingBox ? [f.boundingBox] : (f.boundingBoxes || []),
+                  };
                   page.detectedItems.push(item);
                   detectedItems.push(item);
                 });

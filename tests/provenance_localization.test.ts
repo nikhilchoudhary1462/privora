@@ -107,6 +107,11 @@ describe('Provenance-First Detection & Spatial Localization Architecture', () =>
         const result = await PdfProcessor.processPdf(mockFile);
         expect(result.pages.length).toBe(10);
 
+        // Check Page 2: Zero false positive FACE detections across the table
+        const page2 = result.pages[1];
+        const page2Faces = page2.detectedItems.filter(i => i.type === 'FACE');
+        expect(page2Faces.length).toBe(0);
+
         // Check Page 10: Zero PAN masks
         const page10 = result.pages[9];
         const page10Pans = page10.detectedItems.filter(i => i.type === 'PAN_CARD');

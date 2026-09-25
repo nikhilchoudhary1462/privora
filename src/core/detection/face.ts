@@ -33,6 +33,48 @@ export class FaceDetector {
       return { faces: [], detectedItems: [], durationMs: 0 };
     }
 
+    const startTime = performance.now();
+
+    // 1. First attempt hardware-accelerated native browser FaceDetector (Shape Detection API) if supported
+    if (typeof window !== 'undefined' && 'FaceDetector' in (window as any)) {
+      try {
+        const NativeDetector = (window as any).FaceDetector;
+        const detector = new NativeDetector({ fastMode: true, maxDetectedFaces: 10 });
+        const nativeResults = await detector.detect(imageOrCanvas);
+        if (Array.isArray(nativeResults)) {
+          const faces: BoundingBox[] = nativeResults.map((r: any, idx: number) => {
+            const b = r.boundingBox;
+            return {
+              x: Math.max(0, Math.round(b.x)),
+              y: Math.max(0, Math.round(b.y)),
+              width: Math.min(origWidth, Math.round(b.width)),
+              height: Math.min(origHeight, Math.round(b.height)),
+              label: `Face Landmark #${idx + 1}`,
+              isNormalized: false,
+            };
+          });
+
+          const detectedItems: DetectedItem[] = faces.map((face, i) => ({
+            id: `face_${i + 1}`,
+            type: 'FACE',
+            label: `Human Face Biometric (${face.width}x${face.height}px)`,
+            value: `[Biometric Face Landmark #${i + 1}]`,
+            confidence: 0.98,
+            boundingBox: face,
+            boundingBoxes: [face],
+            localizationState: 'EXACT',
+            detectionConfidence: 'HIGH',
+            complianceTags: ['DPDP_INDIA', 'GDPR'],
+            recommendation: 'Biometric visual data. Selective region encryption recommended before sharing.',
+          }));
+
+          return { faces, detectedItems, durationMs: Math.round(performance.now() - startTime) };
+        }
+      } catch (nativeErr) {
+        // Fallback to Web Worker morphological analyzer
+      }
+    }
+
     // Downscale for fast Worker computation (max 640px) while maintaining aspect ratio
     const maxDim = 640;
     const scale = Math.min(1.0, maxDim / Math.max(origWidth, origHeight));
@@ -48,7 +90,6 @@ export class FaceDetector {
     ctx.drawImage(imageOrCanvas, 0, 0, targetW, targetH);
     const imgData = ctx.getImageData(0, 0, targetW, targetH);
 
-    const startTime = performance.now();
     const requestId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `req_${Date.now()}_${Math.random()}`;
     let downscaledFaces: BoundingBox[] = [];
 
@@ -129,6 +170,9 @@ export class FaceDetector {
       value: `[Biometric Face Landmark #${i + 1}]`,
       confidence: 0.94, // High geometric & chrominance cluster certainty
       boundingBox: face,
+      boundingBoxes: [face],
+      localizationState: 'EXACT',
+      detectionConfidence: 'HIGH',
       complianceTags: ['DPDP_INDIA', 'GDPR'],
       recommendation: 'Biometric visual data. Selective region encryption recommended before sharing.',
     }));

@@ -38,9 +38,10 @@ export function analyzeFacesFromImageData(
 
   // Options configuration
   const minDim = Math.min(width, height);
-  const minFacePx = options?.minFaceSize ? Math.max(16, options.minFaceSize) : Math.max(16, Math.floor(minDim * 0.04));
-  const maxFacePx = options?.maxFaceSize ? Math.min(minDim, options.maxFaceSize) : Math.floor(minDim * 0.95);
-  const confidenceThresh = options?.confidenceThreshold ?? 0.15;
+  const minFacePx = options?.minFaceSize ? Math.max(20, options.minFaceSize) : Math.max(24, Math.floor(minDim * 0.06));
+  // In ID documents and photos, a face never exceeds 45% of the shortest page/photo dimension
+  const maxFacePx = options?.maxFaceSize ? Math.min(minDim, options.maxFaceSize) : Math.floor(minDim * 0.45);
+  const confidenceThresh = options?.confidenceThreshold ?? 0.35;
 
   // Binary map of skin-like pixels in YCbCr color space (Comprehensive Kovac, Peer & Chai-Ngan model)
   const skinMap = new Uint8Array(width * height);
@@ -57,10 +58,10 @@ export function analyzeFacesFromImageData(
 
     // Comprehensive skin tone spectrum: covers fair, wheatish, olive, elderly, and warm/cool lighting
     const isSkin =
-      cb >= 68 && cb <= 142 &&
-      cr >= 120 && cr <= 184 &&
-      y >= 20 && y <= 245 &&
-      r >= g - 8 && (r - b) >= -12;
+      cb >= 75 && cb <= 135 &&
+      cr >= 125 && cr <= 180 &&
+      y >= 30 && y <= 240 &&
+      r >= g - 5 && (r - b) >= -5;
 
     skinMap[i / 4] = isSkin ? 1 : 0;
   }
@@ -70,7 +71,7 @@ export function analyzeFacesFromImageData(
   const candidateBoxes: { minX: number; maxX: number; minY: number; maxY: number; count: number; score: number }[] = [];
 
   const getIdx = (x: number, y: number) => y * width + x;
-  const minPixels = Math.max(16, Math.floor(width * height * 0.002));
+  const minPixels = Math.max(64, Math.floor(minFacePx * minFacePx * 0.35));
 
   for (let y = 0; y < height; y += 2) {
     for (let x = 0; x < width; x += 2) {
@@ -112,37 +113,39 @@ export function analyzeFacesFromImageData(
         const aspect = boxW / Math.max(1, boxH);
         const maxBoxDim = Math.max(boxW, boxH);
 
-        // Filter valid face dimensions, aspect ratio (0.35 to 2.0), and minimum pixel density
-        // Also reject small top-right corner logos (such as the Aadhaar fingerprint emblem in the header)
-        const isTopRightCornerEmblem = (minX > width * 0.65) && (minY < height * 0.22) && (boxW < width * 0.22);
+        // Strict human facial geometry:
+        // 1. Aspect ratio strictly between 0.60 and 1.35 (human heads are vertical ovals or roughly square, never wide ribbons)
+        // 2. Solid fill factor >= 0.35 (genuine photo cluster, not sparse text characters or empty table borders)
+        // 3. Reject corner headers and document margin emblems
+        const isTopCornerEmblem = (minX > width * 0.65 || maxX < width * 0.25) && (minY < height * 0.15) && (boxW < width * 0.20);
+        const boxArea = Math.max(1, boxW * boxH);
+        // Because the grid steps by 2 in X and Y, each visited sample represents 4 pixels
+        const solidDensity = (count * 4) / boxArea;
 
         if (
           count >= minPixels && 
           maxBoxDim >= minFacePx && 
           maxBoxDim <= maxFacePx && 
-          aspect >= 0.35 && 
-          aspect <= 2.0 &&
-          !isTopRightCornerEmblem
+          aspect >= 0.60 && 
+          aspect <= 1.35 &&
+          solidDensity >= confidenceThresh &&
+          !isTopCornerEmblem
         ) {
-          const boxArea = Math.max(1, boxW * boxH);
-          const density = Math.min(1.0, count / (boxArea * 0.18));
-          if (density >= confidenceThresh) {
-            candidateBoxes.push({ minX, maxX, minY, maxY, count, score: density });
-          }
+          candidateBoxes.push({ minX, maxX, minY, maxY, count, score: solidDensity });
         }
       }
     }
   }
 
-  // Format and clamp bounding boxes (generously cover entire head, hair, chin, and ears)
+  // Format and clamp bounding boxes with tight facial photo margins
   const faces: BoundingBox[] = candidateBoxes.map((b, index) => {
     const rawW = b.maxX - b.minX;
     const rawH = b.maxY - b.minY;
 
-    // Generous head/hair/chin margins
-    const padX = Math.floor(rawW * 0.28);
-    const padYTop = Math.floor(rawH * 0.45);
-    const padYBottom = Math.floor(rawH * 0.30);
+    // Tight head/portrait margins
+    const padX = Math.floor(rawW * 0.08);
+    const padYTop = Math.floor(rawH * 0.12);
+    const padYBottom = Math.floor(rawH * 0.08);
 
     const x = Math.max(0, Math.min(width - 1, b.minX - padX));
     const y = Math.max(0, Math.min(height - 1, b.minY - padYTop));
@@ -181,9 +184,9 @@ self.onmessage = function(e) {
     }
 
     var minDim = Math.min(width, height);
-    var minFacePx = (options && options.minFaceSize) ? Math.max(16, options.minFaceSize) : Math.max(16, Math.floor(minDim * 0.04));
-    var maxFacePx = (options && options.maxFaceSize) ? Math.min(minDim, options.maxFaceSize) : Math.floor(minDim * 0.95);
-    var confidenceThresh = (options && typeof options.confidenceThreshold === 'number') ? options.confidenceThreshold : 0.15;
+    var minFacePx = (options && options.minFaceSize) ? Math.max(20, options.minFaceSize) : Math.max(24, Math.floor(minDim * 0.06));
+    var maxFacePx = (options && options.maxFaceSize) ? Math.min(minDim, options.maxFaceSize) : Math.floor(minDim * 0.45);
+    var confidenceThresh = (options && typeof options.confidenceThreshold === 'number') ? options.confidenceThreshold : 0.35;
 
     var skinMap = new Uint8Array(width * height);
     for (var i = 0; i < data.length; i += 4) {
@@ -191,13 +194,13 @@ self.onmessage = function(e) {
       var y = 0.299 * r + 0.587 * g + 0.114 * b;
       var cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
       var cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-      var isSkin = cb >= 68 && cb <= 142 && cr >= 120 && cr <= 184 && y >= 20 && y <= 245 && r >= g - 8 && (r - b) >= -12;
+      var isSkin = cb >= 75 && cb <= 135 && cr >= 125 && cr <= 180 && y >= 30 && y <= 240 && r >= g - 5 && (r - b) >= -5;
       skinMap[i / 4] = isSkin ? 1 : 0;
     }
 
     var visited = new Uint8Array(width * height);
     var candidateBoxes = [];
-    var minPixels = Math.max(16, Math.floor(width * height * 0.002));
+    var minPixels = Math.max(64, Math.floor(minFacePx * minFacePx * 0.35));
 
     for (var y = 0; y < height; y += 2) {
       for (var x = 0; x < width; x += 2) {
@@ -234,14 +237,12 @@ self.onmessage = function(e) {
           var boxH = maxY - minY;
           var aspect = boxW / Math.max(1, boxH);
           var maxBoxDim = Math.max(boxW, boxH);
-          var isTopRightEmblem = (minX > width * 0.65) && (minY < height * 0.22) && (boxW < width * 0.22);
+          var isTopCornerEmblem = (minX > width * 0.65 || maxX < width * 0.25) && (minY < height * 0.15) && (boxW < width * 0.20);
+          var boxArea = Math.max(1, boxW * boxH);
+          var solidDensity = (count * 4) / boxArea;
 
-          if (count >= minPixels && maxBoxDim >= minFacePx && maxBoxDim <= maxFacePx && aspect >= 0.35 && aspect <= 2.0 && !isTopRightEmblem) {
-            var boxArea = Math.max(1, boxW * boxH);
-            var density = Math.min(1.0, count / (boxArea * 0.18));
-            if (density >= confidenceThresh) {
-              candidateBoxes.push({ minX: minX, maxX: maxX, minY: minY, maxY: maxY, count: count });
-            }
+          if (count >= minPixels && maxBoxDim >= minFacePx && maxBoxDim <= maxFacePx && aspect >= 0.60 && aspect <= 1.35 && solidDensity >= confidenceThresh && !isTopCornerEmblem) {
+            candidateBoxes.push({ minX: minX, maxX: maxX, minY: minY, maxY: maxY, count: count });
           }
         }
       }
@@ -250,9 +251,9 @@ self.onmessage = function(e) {
     var faces = candidateBoxes.map(function(b, index) {
       var rawW = b.maxX - b.minX;
       var rawH = b.maxY - b.minY;
-      var padX = Math.floor(rawW * 0.28);
-      var padYTop = Math.floor(rawH * 0.45);
-      var padYBottom = Math.floor(rawH * 0.30);
+      var padX = Math.floor(rawW * 0.08);
+      var padYTop = Math.floor(rawH * 0.12);
+      var padYBottom = Math.floor(rawH * 0.08);
       var x = Math.max(0, Math.min(width - 1, b.minX - padX));
       var y = Math.max(0, Math.min(height - 1, b.minY - padYTop));
       var w = Math.max(1, Math.min(width - x, rawW + padX * 2));

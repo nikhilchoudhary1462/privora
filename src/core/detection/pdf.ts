@@ -130,66 +130,6 @@ export class PdfProcessor {
         });
       });
 
-      // Detect face photo regions visually on this page canvas
-      if (typeof document !== 'undefined') {
-        try {
-          const thumbScale = Math.min(1, 320 / Math.max(canvas.width, canvas.height));
-          const tw = Math.round(canvas.width * thumbScale);
-          const th = Math.round(canvas.height * thumbScale);
-          const tCan = document.createElement('canvas');
-          tCan.width = tw;
-          tCan.height = th;
-          const tCtx = tCan.getContext('2d');
-          if (tCtx) {
-            tCtx.drawImage(canvas, 0, 0, tw, th);
-            const imgData = tCtx.getImageData(0, 0, tw, th);
-            let skinPixels = 0;
-            let minSx = tw, maxSx = 0, minSy = th, maxSy = 0;
-            const data = imgData.data;
-            for (let y = 0; y < th; y++) {
-              for (let x = 0; x < tw; x++) {
-                const idx = (y * tw + x) * 4;
-                const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-                if (r > 65 && g > 45 && b > 25 && r > g && r > b && (r - g) >= 10 && (r - b) >= 15) {
-                  skinPixels++;
-                  if (x < minSx) minSx = x;
-                  if (x > maxSx) maxSx = x;
-                  if (y < minSy) minSy = y;
-                  if (y > maxSy) maxSy = y;
-                }
-              }
-            }
-            if (skinPixels > 140 && (maxSx - minSx) >= 18 && (maxSy - minSy) >= 22) {
-              const fx = Math.round(minSx / thumbScale);
-              const fy = Math.round(minSy / thumbScale);
-              const fw = Math.round((maxSx - minSx) / thumbScale);
-              const fh = Math.round((maxSy - minSy) / thumbScale);
-              const faceBox: BoundingBox = {
-                x: fx,
-                y: fy,
-                width: fw,
-                height: fh,
-                label: 'Face Photo',
-                isNormalized: false,
-              };
-              pageItems.push({
-                id: `p${pageNum}_face_${pageItems.length}`,
-                type: 'FACE',
-                label: 'Biometric Face Photo',
-                value: 'FACE_BIOMETRIC',
-                confidence: 0.94,
-                complianceTags: ['DPDP_INDIA', 'GDPR'],
-                recommendation: 'Biometric facial photograph requiring privacy shielding.',
-                pageNumber: pageNum,
-                localizationState: 'EXACT',
-                detectionConfidence: 'HIGH',
-                boundingBox: faceBox,
-                boundingBoxes: [faceBox],
-              });
-            }
-          }
-        } catch (e) {}
-      }
       const pageDataUrl = canvas.toDataURL('image/png');
       pages.push({
         pageNumber: pageNum,
