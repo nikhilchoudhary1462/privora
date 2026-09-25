@@ -952,7 +952,29 @@
         }
       }
 
+      // Horizontal boundaries (left / right margins)
+      const colActivity = new Array(sw).fill(0);
+      for (let x = 0; x < sw; x++) {
+        let nonMargin = 0;
+        for (let y = cardTop; y <= cardBottom; y++) {
+          const i = (y * sw + x) * 4;
+          if (d[i] < 235 || d[i + 1] < 235 || d[i + 2] < 235) nonMargin++;
+        }
+        colActivity[x] = nonMargin / (cardBottom - cardTop + 1);
+      }
+
+      let cardLeft = 0;
+      let cardRight = sw - 1;
+      for (let x = 0; x < sw; x++) {
+        if (colActivity[x] > 0.06) { cardLeft = x; break; }
+      }
+      for (let x = sw - 1; x > cardLeft; x--) {
+        if (colActivity[x] > 0.06) { cardRight = x; break; }
+      }
+
+      const cardX = Math.round(cardLeft / scale);
       const cardY = Math.round(cardTop / scale);
+      const cardW = Math.max(100, Math.round((cardRight - cardLeft) / scale));
       const cardH = Math.max(80, Math.round((cardBottom - cardTop) / scale));
 
       // 2. Scan entire card for Face Photo skin-tone clusters (both left and right halves)
@@ -1030,19 +1052,19 @@
 
       if (isExplicitPan) {
         // --- PAN CARD PROTECTION: PHOTO + PAN NUMBER ---
-        let pX = 0;
-        let pY = Math.round(cardY + cardH * 0.20);
-        let pW = Math.round(w * 0.24);
+        let pX = cardX + Math.round(cardW * 0.01);
+        let pY = cardY + Math.round(cardH * 0.22);
+        let pW = Math.round(cardW * 0.22);
         let pH = Math.round(cardH * 0.46);
 
         if (skinRight > skinLeft + 25 && skinRight > 30) {
           // Rare UTIITSL PAN cards where photo is on the right
-          pX = Math.round(w * 0.68);
-          pW = Math.round(w * 0.26);
-          pY = Math.round(cardY + cardH * 0.22);
-          pH = Math.round(cardH * 0.48);
+          pX = cardX + Math.round(cardW * 0.72);
+          pW = Math.round(cardW * 0.25);
+          pY = cardY + Math.round(cardH * 0.22);
+          pH = Math.round(cardH * 0.46);
         } else if (skinLeft > 15 && maxYLeft > minYLeft && minYLeft > cardH * 0.12) {
-          pY = Math.max(Math.round(cardY + cardH * 0.18), Math.round((minYLeft - 10) / scale));
+          pY = Math.max(cardY + Math.round(cardH * 0.18), Math.round((minYLeft - 10) / scale));
           pH = Math.min(Math.round(cardH * 0.48), Math.max(Math.round(cardH * 0.38), Math.round((maxYLeft + 10) / scale) - pY));
         }
 
@@ -1054,10 +1076,10 @@
           label: 'Face Photo'
         });
 
-        const panX = Math.round(w * 0.20);
-        const panY = Math.round(cardY + cardH * 0.38);
-        const panW = Math.round(w * 0.46);
-        const panH = Math.round(cardH * 0.16);
+        const panX = cardX + Math.round(cardW * 0.21);
+        const panY = cardY + Math.round(cardH * 0.39);
+        const panW = Math.round(cardW * 0.44);
+        const panH = Math.round(cardH * 0.14);
 
         boxes.push({
           x: panX,
@@ -1070,17 +1092,17 @@
         return boxes;
       }
 
-      // --- AADHAAR CARD PROTECTION: PHOTO + AADHAAR NUMBER + QR MATRIX ---
-      // 1. Biometric Face Photo (left side)
-      let fX = 0;
-      let fY = Math.round(cardY + cardH * 0.16);
-      let fW = Math.round(w * 0.28);
-      let fH = Math.round(cardH * 0.54);
+      // --- AADHAAR CARD PROTECTION: TIGHT PHOTO + TIGHT AADHAAR NUMBER + TIGHT QR MATRIX ---
+      // 1. Biometric Face Photo (left side - strictly portrait photo without touching Name)
+      let fX = cardX + Math.round(cardW * 0.01);
+      let fY = cardY + Math.round(cardH * 0.20);
+      let fW = Math.round(cardW * 0.20);
+      let fH = Math.round(cardH * 0.50);
 
       if (skinLeft > 15 && maxXLeft > minXLeft && maxYLeft > minYLeft) {
-        fY = Math.max(cardY, Math.min(Math.round((minYLeft - 10) / scale), Math.round(cardY + cardH * 0.15)));
-        fW = Math.min(Math.round(w * 0.32), Math.max(Math.round(w * 0.22), Math.round((maxXLeft + 10) / scale)));
-        fH = Math.min(Math.round(cardH * 0.62), Math.max(Math.round(cardH * 0.48), Math.round((maxYLeft + 15) / scale) - fY));
+        fY = Math.max(cardY + Math.round(cardH * 0.18), Math.round((minYLeft - 10) / scale));
+        fW = Math.min(Math.round(cardW * 0.22), Math.max(Math.round(cardW * 0.18), Math.round((maxXLeft + 5) / scale) - cardX));
+        fH = Math.min(Math.round(cardH * 0.52), Math.max(Math.round(cardH * 0.42), Math.round((maxYLeft + 10) / scale) - fY));
       }
 
       boxes.push({
@@ -1091,11 +1113,11 @@
         label: 'Face Photo'
       });
 
-      // 2. 12-Digit Aadhaar Number Box (MANDATORY: strictly covers the full 12-digit row at the bottom)
-      const aadhX = Math.round(w * 0.14);
-      const aadhY = Math.round(cardY + cardH * 0.67);
-      const aadhW = Math.round(w * 0.72);
-      const aadhH = Math.round(cardH * 0.17);
+      // 2. 12-Digit Aadhaar Number Box (strictly covers the 12 digits directly above the red line)
+      const aadhX = cardX + Math.round(cardW * 0.21);
+      const aadhY = cardY + Math.round(cardH * 0.72);
+      const aadhW = Math.round(cardW * 0.58);
+      const aadhH = Math.round(cardH * 0.12);
 
       boxes.push({
         x: aadhX,
@@ -1105,12 +1127,12 @@
         label: 'Aadhaar Number'
       });
 
-      // 3. QR Code Matrix Box (Right side - contains digital biometric/demographic identity)
+      // 3. QR Code Matrix Box (strictly the QR code square on the far right without touching demographic text)
       if (hasQrCode || !isExplicitPan) {
-        const qrX = Math.round(w * 0.58);
-        const qrY = Math.round(cardY + cardH * 0.22);
-        const qrW = Math.round(w * 0.38);
-        const qrH = Math.round(cardH * 0.48);
+        const qrX = cardX + Math.round(cardW * 0.72);
+        const qrY = cardY + Math.round(cardH * 0.26);
+        const qrW = Math.round(cardW * 0.26);
+        const qrH = Math.round(cardH * 0.44);
 
         boxes.push({
           x: qrX,
@@ -1132,24 +1154,24 @@
       }
       return [
         {
-          x: 0,
-          y: Math.round(h * 0.16),
-          width: Math.round(w * 0.28),
-          height: Math.round(h * 0.54),
+          x: Math.round(w * 0.01),
+          y: Math.round(h * 0.20),
+          width: Math.round(w * 0.20),
+          height: Math.round(h * 0.50),
           label: 'Face Photo'
         },
         {
-          x: Math.round(w * 0.14),
-          y: Math.round(h * 0.67),
-          width: Math.round(w * 0.72),
-          height: Math.round(h * 0.17),
+          x: Math.round(w * 0.21),
+          y: Math.round(h * 0.72),
+          width: Math.round(w * 0.58),
+          height: Math.round(h * 0.12),
           label: 'Aadhaar Number'
         },
         {
-          x: Math.round(w * 0.58),
-          y: Math.round(h * 0.22),
-          width: Math.round(w * 0.38),
-          height: Math.round(h * 0.48),
+          x: Math.round(w * 0.72),
+          y: Math.round(h * 0.26),
+          width: Math.round(w * 0.26),
+          height: Math.round(h * 0.44),
           label: 'QR Matrix'
         }
       ];
@@ -2283,24 +2305,24 @@
               currentBoxes = [...detected];
             } else {
               currentBoxes.push({
-                x: 0,
-                y: Math.round(canvas.height * 0.16),
-                width: Math.round(canvas.width * 0.28),
-                height: Math.round(canvas.height * 0.54),
+                x: Math.round(canvas.width * 0.01),
+                y: Math.round(canvas.height * 0.20),
+                width: Math.round(canvas.width * 0.20),
+                height: Math.round(canvas.height * 0.50),
                 label: 'Face Photo'
               });
               currentBoxes.push({
-                x: Math.round(canvas.width * 0.14),
-                y: Math.round(canvas.height * 0.67),
-                width: Math.round(canvas.width * 0.72),
-                height: Math.round(canvas.height * 0.17),
+                x: Math.round(canvas.width * 0.21),
+                y: Math.round(canvas.height * 0.72),
+                width: Math.round(canvas.width * 0.58),
+                height: Math.round(canvas.height * 0.12),
                 label: 'Aadhaar Number'
               });
               currentBoxes.push({
-                x: Math.round(canvas.width * 0.58),
-                y: Math.round(canvas.height * 0.22),
-                width: Math.round(canvas.width * 0.38),
-                height: Math.round(canvas.height * 0.48),
+                x: Math.round(canvas.width * 0.72),
+                y: Math.round(canvas.height * 0.26),
+                width: Math.round(canvas.width * 0.26),
+                height: Math.round(canvas.height * 0.44),
                 label: 'QR Matrix'
               });
             }
@@ -2611,10 +2633,10 @@
     if (addFaceBtn) {
       addFaceBtn.onclick = () => {
         currentBoxes.push({
-          x: Math.round(canvas.width * 0.10),
-          y: Math.round(canvas.height * 0.28),
-          width: Math.round(canvas.width * 0.16),
-          height: Math.round(canvas.height * 0.38),
+          x: Math.round(canvas.width * 0.01),
+          y: Math.round(canvas.height * 0.20),
+          width: Math.round(canvas.width * 0.20),
+          height: Math.round(canvas.height * 0.50),
           label: 'Face Photo'
         });
         selectedBoxIdx = currentBoxes.length - 1;
@@ -2627,10 +2649,10 @@
     if (addNameBtn) {
       addNameBtn.onclick = () => {
         currentBoxes.push({
-          x: Math.round(canvas.width * 0.32),
-          y: Math.round(canvas.height * 0.35),
-          width: Math.round(canvas.width * 0.28),
-          height: Math.round(canvas.height * 0.14),
+          x: Math.round(canvas.width * 0.24),
+          y: Math.round(canvas.height * 0.26),
+          width: Math.round(canvas.width * 0.44),
+          height: Math.round(canvas.height * 0.18),
           label: 'Name / Demographic'
         });
         selectedBoxIdx = currentBoxes.length - 1;
@@ -2643,10 +2665,10 @@
     if (addIdBtn) {
       addIdBtn.onclick = () => {
         currentBoxes.push({
-          x: Math.round(canvas.width * 0.14),
-          y: Math.round(canvas.height * 0.67),
-          width: Math.round(canvas.width * 0.72),
-          height: Math.round(canvas.height * 0.17),
+          x: Math.round(canvas.width * 0.21),
+          y: Math.round(canvas.height * 0.72),
+          width: Math.round(canvas.width * 0.58),
+          height: Math.round(canvas.height * 0.12),
           label: 'Aadhaar / ID Number'
         });
         selectedBoxIdx = currentBoxes.length - 1;
@@ -2659,10 +2681,10 @@
     if (addQrBtn) {
       addQrBtn.onclick = () => {
         currentBoxes.push({
-          x: Math.round(canvas.width * 0.58),
-          y: Math.round(canvas.height * 0.22),
-          width: Math.round(canvas.width * 0.38),
-          height: Math.round(canvas.height * 0.48),
+          x: Math.round(canvas.width * 0.72),
+          y: Math.round(canvas.height * 0.26),
+          width: Math.round(canvas.width * 0.26),
+          height: Math.round(canvas.height * 0.44),
           label: 'QR Matrix'
         });
         selectedBoxIdx = currentBoxes.length - 1;
