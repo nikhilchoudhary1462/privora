@@ -1233,16 +1233,22 @@
     }
 
     if (isPdf) {
-      if (typeof pdfjsLib !== 'undefined') {
+      const pdfLib = typeof pdfjsLib !== 'undefined' ? pdfjsLib : (typeof window !== 'undefined' ? window.pdfjsLib : undefined);
+      const workerLib = typeof pdfjsWorker !== 'undefined' ? pdfjsWorker : (typeof window !== 'undefined' ? window.pdfjsWorker : undefined);
+
+      if (pdfLib) {
         try {
+          if (workerLib && workerLib.WorkerMessageHandler) {
+            pdfLib.PDFWorker._mainThreadWorkerMessageHandler = workerLib.WorkerMessageHandler;
+          }
           if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+            pdfLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
           }
         } catch (e) {}
 
         try {
           const arrayBuffer = await file.arrayBuffer();
-          const loadingTask = pdfjsLib.getDocument({
+          const loadingTask = pdfLib.getDocument({
             data: new Uint8Array(arrayBuffer),
             useSystemFonts: true,
           });
@@ -1840,6 +1846,26 @@
         } catch (e) {
           docExtractedText = 'Could not read text stream.';
         }
+      } else if (isPdf) {
+        try {
+          const buffer = await file.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          let text = '';
+          let curWord = '';
+          for (let i = 0; i < bytes.length; i++) {
+            const b = bytes[i];
+            if ((b >= 32 && b <= 126) || b === 10 || b === 13 || b === 9) {
+              curWord += String.fromCharCode(b);
+            } else {
+              if (curWord.length >= 3) text += curWord + ' ';
+              curWord = '';
+            }
+          }
+          if (curWord.length >= 3) text += curWord;
+          docExtractedText = text.length > 30 ? text : 'Document stream preview.';
+        } catch (e) {
+          docExtractedText = 'Document stream preview.';
+        }
       } else {
         docExtractedText = 'Document stream preview.';
       }
@@ -1936,16 +1962,22 @@
     baseImage = new Image();
 
     if (isPdf) {
-      if (typeof pdfjsLib !== 'undefined') {
+      const pdfLib = typeof pdfjsLib !== 'undefined' ? pdfjsLib : (typeof window !== 'undefined' ? window.pdfjsLib : undefined);
+      const workerLib = typeof pdfjsWorker !== 'undefined' ? pdfjsWorker : (typeof window !== 'undefined' ? window.pdfjsWorker : undefined);
+
+      if (pdfLib) {
         try {
+          if (workerLib && workerLib.WorkerMessageHandler) {
+            pdfLib.PDFWorker._mainThreadWorkerMessageHandler = workerLib.WorkerMessageHandler;
+          }
           if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+            pdfLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
           }
         } catch (e) {}
 
         try {
           const arrayBuffer = await file.arrayBuffer();
-          const loadingTask = pdfjsLib.getDocument({
+          const loadingTask = pdfLib.getDocument({
             data: new Uint8Array(arrayBuffer),
             useSystemFonts: true,
           });
