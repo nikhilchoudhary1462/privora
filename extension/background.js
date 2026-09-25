@@ -62,13 +62,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'FETCH_BLOB' && message.url) {
     fetch(message.url, { credentials: 'include' })
-      .then(res => res.blob())
-      .then(blob => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          sendResponse({ success: true, dataUrl: reader.result, mimeType: blob.type });
-        };
-        reader.readAsDataURL(blob);
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP status ${res.status}`);
+        return res.blob();
+      })
+      .then(async (blob) => {
+        try {
+          const buffer = await blob.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          let binary = '';
+          const chunkSize = 8192;
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+          }
+          const base64 = btoa(binary);
+          const dataUrl = `data:${blob.type || 'application/octet-stream'};base64,${base64}`;
+          sendResponse({ success: true, dataUrl, mimeType: blob.type });
+        } catch (convErr) {
+          sendResponse({ success: false, error: convErr.message });
+        }
       })
       .catch(err => {
         sendResponse({ success: false, error: err.message });

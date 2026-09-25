@@ -45,6 +45,93 @@
   }
 
   // -------------------------------------------------------------
+  // Safe Cross-Context Utilities (Timeout-protected messaging & CSP-safe PDF Worker)
+  // -------------------------------------------------------------
+  function sendRuntimeMessageWithTimeout(msg, timeoutMs = 2500) {
+    return new Promise((resolve) => {
+      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
+        resolve(null);
+        return;
+      }
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve(null);
+        }
+      }, timeoutMs);
+
+      try {
+        chrome.runtime.sendMessage(msg, (resp) => {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            resolve(resp);
+          }
+        });
+      } catch (e) {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(null);
+        }
+      }
+    });
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    if (!dataUrl) return null;
+    try {
+      const parts = dataUrl.split(',');
+      if (parts.length < 2) return null;
+      const mime = parts[0].match(/:(.*?);/)?.[1] || 'application/octet-stream';
+      const bstr = atob(parts[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      return new Blob([u8arr], { type: mime });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function ensurePdfWorkerHandler() {
+    try {
+      const pWorker = (typeof pdfjsWorker !== 'undefined') ? pdfjsWorker :
+                      (typeof globalThis !== 'undefined' && globalThis.pdfjsWorker) ? globalThis.pdfjsWorker :
+                      (typeof window !== 'undefined' && window.pdfjsWorker) ? window.pdfjsWorker : null;
+      const pLib = (typeof pdfjsLib !== 'undefined') ? pdfjsLib :
+                   (typeof globalThis !== 'undefined' && globalThis.pdfjsLib) ? globalThis.pdfjsLib :
+                   (typeof window !== 'undefined' && window.pdfjsLib) ? window.pdfjsLib : null;
+
+      if (pWorker) {
+        if (typeof globalThis !== 'undefined') globalThis.pdfjsWorker = pWorker;
+        if (typeof window !== 'undefined') window.pdfjsWorker = pWorker;
+      }
+      if (pLib && pLib.PDFWorker && pWorker && pWorker.WorkerMessageHandler) {
+        try {
+          Object.defineProperty(pLib.PDFWorker, '_mainThreadWorkerMessageHandler', {
+            get: () => pWorker.WorkerMessageHandler,
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {}
+      }
+      if (pLib && pLib.GlobalWorkerOptions && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
+        try {
+          pLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+        } catch (e) {}
+      }
+      return { pdfLib: pLib, workerLib: pWorker };
+    } catch (e) {
+      return { pdfLib: null, workerLib: null };
+    }
+  }
+  ensurePdfWorkerHandler();
+
+  // -------------------------------------------------------------
   // 1. Deterministic PII Detection Algorithms
   // -------------------------------------------------------------
   const verhoeffTableD = [
@@ -1238,18 +1325,9 @@
     }
 
     if (isPdf) {
-      const pdfLib = typeof pdfjsLib !== 'undefined' ? pdfjsLib : (typeof window !== 'undefined' ? window.pdfjsLib : undefined);
-      const workerLib = typeof pdfjsWorker !== 'undefined' ? pdfjsWorker : (typeof window !== 'undefined' ? window.pdfjsWorker : undefined);
+      const { pdfLib, workerLib } = ensurePdfWorkerHandler();
 
       if (pdfLib) {
-        try {
-          if (workerLib && workerLib.WorkerMessageHandler) {
-            pdfLib.PDFWorker._mainThreadWorkerMessageHandler = workerLib.WorkerMessageHandler;
-          }
-          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
-            pdfLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
-          }
-        } catch (e) {}
 
         try {
           const arrayBuffer = await file.arrayBuffer();
@@ -1998,18 +2076,9 @@
     baseImage = new Image();
 
     if (isPdf) {
-      const pdfLib = typeof pdfjsLib !== 'undefined' ? pdfjsLib : (typeof window !== 'undefined' ? window.pdfjsLib : undefined);
-      const workerLib = typeof pdfjsWorker !== 'undefined' ? pdfjsWorker : (typeof window !== 'undefined' ? window.pdfjsWorker : undefined);
+      const { pdfLib, workerLib } = ensurePdfWorkerHandler();
 
       if (pdfLib) {
-        try {
-          if (workerLib && workerLib.WorkerMessageHandler) {
-            pdfLib.PDFWorker._mainThreadWorkerMessageHandler = workerLib.WorkerMessageHandler;
-          }
-          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
-            pdfLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
-          }
-        } catch (e) {}
 
         try {
           const arrayBuffer = await file.arrayBuffer();
@@ -3161,16 +3230,12 @@
   async function retraceAndRestoreImage(imageBlob, fileName) {
     const memoryManifests = window._privoraRecentManifests || [];
 
-    // Query background service worker for cross-tab shared manifests
+    // Query background service worker for cross-tab shared manifests (timeout-safe)
     let bgManifests = [];
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-      try {
-        const resp = await new Promise((res) => {
-          chrome.runtime.sendMessage({ type: 'GET_MANIFESTS' }, res);
-        });
-        if (resp && resp.manifests) bgManifests = resp.manifests;
-      } catch (e) {}
-    }
+    try {
+      const resp = await sendRuntimeMessageWithTimeout({ type: 'GET_MANIFESTS' }, 1500);
+      if (resp && resp.manifests) bgManifests = resp.manifests;
+    } catch (e) {}
 
     return new Promise((resolve) => {
       const executeRestore = async (storageManifests) => {
@@ -3211,18 +3276,9 @@
         }
 
         if (isPdfTarget) {
-          const pdfLib = typeof pdfjsLib !== 'undefined' ? pdfjsLib : (typeof window !== 'undefined' ? window.pdfjsLib : (typeof globalThis !== 'undefined' ? globalThis.pdfjsLib : undefined));
-          const workerLib = typeof pdfjsWorker !== 'undefined' ? pdfjsWorker : (typeof window !== 'undefined' ? window.pdfjsWorker : (typeof globalThis !== 'undefined' ? globalThis.pdfjsWorker : undefined));
+          const { pdfLib } = ensurePdfWorkerHandler();
           if (pdfLib) {
             try {
-              if (workerLib && workerLib.WorkerMessageHandler) {
-                pdfLib.PDFWorker._mainThreadWorkerMessageHandler = workerLib.WorkerMessageHandler;
-              }
-              if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
-                try {
-                  pdfLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
-                } catch (e) {}
-              }
               const arrayBuffer = await imageBlob.arrayBuffer();
               const loadingTask = pdfLib.getDocument({
                 data: new Uint8Array(arrayBuffer),
@@ -3250,8 +3306,8 @@
                     let drawable = null;
                     if (typeof createImageBitmap === 'function') {
                       try {
-                        const sliceBlob = await fetch(slice.cropDataUrl).then(r => r.blob());
-                        drawable = await createImageBitmap(sliceBlob);
+                        const sliceBlob = dataUrlToBlob(slice.cropDataUrl);
+                        if (sliceBlob) drawable = await createImageBitmap(sliceBlob);
                       } catch (bmpErr) {}
                     }
                     if (!drawable) {
@@ -3291,6 +3347,8 @@
               console.warn('[Privora Shield] Retracing PDF failed:', pdfErr);
             }
           }
+          resolve(null);
+          return;
         }
 
         const img = new Image();
@@ -3384,16 +3442,12 @@
     return new Promise((resolve) => {
       const memoryManifests = window._privoraRecentManifests || [];
       const checkAndIntercept = async (storageManifests) => {
-        // Query background service worker as well
+        // Query background service worker as well (timeout-safe)
         let bgManifests = [];
-        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-          try {
-            const resp = await new Promise((res) => {
-              chrome.runtime.sendMessage({ type: 'GET_MANIFESTS' }, res);
-            });
-            if (resp && resp.manifests) bgManifests = resp.manifests;
-          } catch (e) {}
-        }
+        try {
+          const resp = await sendRuntimeMessageWithTimeout({ type: 'GET_MANIFESTS' }, 1500);
+          if (resp && resp.manifests) bgManifests = resp.manifests;
+        } catch (e) {}
 
         const allManifests = [...memoryManifests, ...bgManifests, ...(storageManifests || [])];
         const manifests = [];
@@ -3462,19 +3516,15 @@
         try {
           let blob;
           if (href.startsWith('data:')) {
-            const r = await fetch(href);
-            blob = await r.blob();
+            blob = dataUrlToBlob(href);
           } else if (href) {
             try {
               blob = await fetch(href).then(r => r.blob());
             } catch (fetchErr) {
               // Bypass CORS using background script if needed
-              const resp = await new Promise((res) => {
-                chrome.runtime.sendMessage({ type: 'FETCH_BLOB', url: href }, res);
-              });
+              const resp = await sendRuntimeMessageWithTimeout({ type: 'FETCH_BLOB', url: href }, 5000);
               if (resp && resp.success && resp.dataUrl) {
-                const r = await fetch(resp.dataUrl);
-                blob = await r.blob();
+                blob = dataUrlToBlob(resp.dataUrl);
               } else {
                 throw fetchErr;
               }
@@ -3483,6 +3533,12 @@
 
           if (!blob) {
             console.warn('[Privora Shield] Could not fetch download blob directly, allowing natural download.');
+            showPrivoraHud({
+              type: 'warning',
+              title: 'Privora Shield · Download',
+              subtitle: 'Could not access file blob. Proceeding with standard download.',
+              durationMs: 3000
+            });
             target.dataset.aegisRestored = 'true';
             target.click();
             resolve(false);
@@ -3532,12 +3588,24 @@
             resolve(true);
           } else {
             console.warn('[Privora Shield] Auto-decryption found no matching slices, downloading file unmodified.');
+            showPrivoraHud({
+              type: 'warning',
+              title: 'Privora Shield · Download',
+              subtitle: `No unblurred pieces found for ${candidateName}. Downloading unmodified.`,
+              durationMs: 3000
+            });
             target.dataset.aegisRestored = 'true';
             target.click();
             resolve(false);
           }
         } catch (err) {
           console.warn('[Privora Shield] Auto-decryption failed, downloading unmodified:', err);
+          showPrivoraHud({
+            type: 'warning',
+            title: 'Privora Shield · Download',
+            subtitle: `Decryption encountered an error. Proceeding with original file.`,
+            durationMs: 3000
+          });
           target.dataset.aegisRestored = 'true';
           target.click();
           resolve(false);
