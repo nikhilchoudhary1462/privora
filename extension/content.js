@@ -458,8 +458,10 @@
     maskedBlob,
     maskedDataUrl,
     detectedBoxes = [],
+    onConfirmAuto,
     onOpenFullScreen,
     onAllowPlaintext,
+    onCancel,
   }) {
     if (activePreviewCard) {
       activePreviewCard.remove();
@@ -514,7 +516,7 @@
           <span style="font-size:9px; background:#ECFDF5; color:#047857; border:1px solid #A7F3D0; padding:2px 7px; border-radius:9999px; font-family:monospace; font-weight:700;">
             PROTECTED ✓
           </span>
-          <button id="privora-preview-close" style="background:transparent; border:none; color:#9ca3af; font-size:14px; cursor:pointer; padding:2px 4px; line-height:1;" title="Dismiss Preview">✕</button>
+          <button id="privora-preview-close" style="background:transparent; border:none; color:#9ca3af; font-size:14px; cursor:pointer; padding:2px 4px; line-height:1;" title="Dismiss & Upload Encrypted">✕</button>
         </div>
       </div>
 
@@ -543,9 +545,9 @@
             <span>⛶</span>
             <span>Edit Full Screen</span>
           </button>
-          <button id="privora-btn-keep" style="background:#A99DD8; color:#ffffff; border:none; border-radius:10px; padding:8px 12px; font-size:11px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:4px; box-shadow:0 1px 3px rgba(0,0,0,0.12); transition:background 0.15s ease;">
+          <button id="privora-btn-keep" style="flex:1; background:#047857; color:#ffffff; border:none; border-radius:10px; padding:8px 10px; font-size:11px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:4px; box-shadow:0 1px 3px rgba(4,120,87,0.3); transition:background 0.15s ease;">
             <span>✓</span>
-            <span>Done</span>
+            <span>Upload Encrypted</span>
           </button>
         </div>
         ${onAllowPlaintext ? `
@@ -564,6 +566,7 @@
       btnClose.onclick = () => {
         card.remove();
         activePreviewCard = null;
+        if (onConfirmAuto) onConfirmAuto();
       };
     }
 
@@ -572,6 +575,7 @@
       btnKeep.onclick = () => {
         card.remove();
         activePreviewCard = null;
+        if (onConfirmAuto) onConfirmAuto();
       };
     }
 
@@ -580,7 +584,7 @@
       btnFullScreen.onclick = () => {
         card.remove();
         activePreviewCard = null;
-        if (onOpenFullScreen) onOpenFullScreen();
+        if (onOpenFullScreen) onOpenFullScreen(detectedBoxes);
       };
     }
 
@@ -859,7 +863,7 @@
   }
 
   async function autoProtectAndSanitizeFile(file, options = {}) {
-    const { onOpenEditor, onAllowPlaintext } = options;
+    const { onOpenEditor, onAllowPlaintext, onConfirmAuto, onCancel } = options;
     const fn = file.name.toLowerCase();
     const isImage = file.type.startsWith('image/') || fn.match(/\.(png|jpe?g|webp|svg|bmp|gif)$/i);
     const isPdf = file.type === 'application/pdf' || fn.endsWith('.pdf');
@@ -991,8 +995,14 @@
                 maskedBlob,
                 maskedDataUrl,
                 detectedBoxes,
-                onOpenFullScreen: onOpenEditor,
+                onConfirmAuto: () => {
+                  if (onConfirmAuto) onConfirmAuto(sanitizedFile);
+                },
+                onOpenFullScreen: (boxes) => {
+                  if (onOpenEditor) onOpenEditor(boxes || detectedBoxes);
+                },
                 onAllowPlaintext,
+                onCancel,
               });
 
               resolve(sanitizedFile);
@@ -1038,6 +1048,7 @@
         actionLabel: onOpenEditor ? 'Inspect' : null,
         onAction: onOpenEditor
       });
+      if (onConfirmAuto) onConfirmAuto(file);
       return file;
     }
 
@@ -1079,9 +1090,12 @@
         onAction: onOpenEditor
       });
 
-      return new File([textBlob], file.name, { type: file.type || 'text/plain' });
+      const sanitizedDoc = new File([textBlob], file.name, { type: file.type || 'text/plain' });
+      if (onConfirmAuto) onConfirmAuto(sanitizedDoc);
+      return sanitizedDoc;
     }
 
+    if (onConfirmAuto) onConfirmAuto(file);
     return file;
   }
 
@@ -2454,28 +2468,64 @@
       e.preventDefault();
       e.stopImmediatePropagation();
 
+      let isCommitted = false;
+
+      const commitFile = (fileToCommit, isPlaintext = false) => {
+        if (isCommitted) return;
+        isCommitted = true;
+        if (isPlaintext) {
+          target.dataset.aegisSanitized = 'true';
+          target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+        } else {
+          replaceInputFiles(target, fileToCommit);
+        }
+      };
+
+      const cancelCommit = () => {
+        if (isCommitted) return;
+        isCommitted = true;
+        try { target.value = ''; } catch (err) {}
+      };
+
       try {
         const sanitizedFile = await autoProtectAndSanitizeFile(file, {
-          onAllowPlaintext: () => {
-            target.dataset.aegisSanitized = 'true';
-            target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+          onConfirmAuto: (sanitized) => {
+            commitFile(sanitized || sanitizedFile);
           },
-          onOpenEditor: () => {
+          onAllowPlaintext: () => {
+            commitFile(file, true);
+          },
+          onCancel: () => {
+            cancelCommit();
+          },
+          onOpenEditor: (detectedBoxes) => {
             showFileInterceptionModal({
               file,
-              initialBoxes: [],
+              initialBoxes: detectedBoxes || [],
               detectedItems: [],
-              onConfirmMask: (sanitized) => replaceInputFiles(target, sanitized),
-              onAllowPlaintext: () => {
-                target.dataset.aegisSanitized = 'true';
-                target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+              onConfirmMask: (sanitized) => {
+                commitFile(sanitized);
               },
-              onCancel: () => { target.value = ''; }
+              onAllowPlaintext: () => {
+                commitFile(file, true);
+              },
+              onCancel: () => {
+                cancelCommit();
+              }
             });
           }
         });
 
-        replaceInputFiles(target, sanitizedFile);
+        // If the host form is submitted before user interacts with the preview card,
+        // commit the auto-encrypted file seamlessly once.
+        const hostForm = target.form || (target.closest && target.closest('form'));
+        if (hostForm) {
+          hostForm.addEventListener('submit', () => {
+            if (!isCommitted) {
+              commitFile(sanitizedFile);
+            }
+          }, { once: true, capture: true });
+        }
       } catch (err) {
         console.warn('[Privora Shield] Auto-protect failed, opening prompt:', err);
         showFileInterceptionPrompt({
@@ -2485,19 +2535,13 @@
               file,
               initialBoxes: [],
               detectedItems: [],
-              onConfirmMask: (sanitized) => replaceInputFiles(target, sanitized),
-              onAllowPlaintext: () => {
-                target.dataset.aegisSanitized = 'true';
-                target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-              },
-              onCancel: () => { target.value = ''; }
+              onConfirmMask: (sanitized) => commitFile(sanitized),
+              onAllowPlaintext: () => commitFile(file, true),
+              onCancel: () => cancelCommit()
             });
           },
-          onAllowPlaintext: () => {
-            target.dataset.aegisSanitized = 'true';
-            target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-          },
-          onCancel: () => { target.value = ''; }
+          onAllowPlaintext: () => commitFile(file, true),
+          onCancel: () => cancelCommit()
         });
       }
     }
@@ -2522,32 +2566,44 @@
       e.stopImmediatePropagation();
 
       const dropTarget = e.target;
+      let isCommitted = false;
+
+      const commitDrop = (fileToCommit) => {
+        if (isCommitted) return;
+        isCommitted = true;
+        const dt = new DataTransfer();
+        dt.items.add(fileToCommit);
+        dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      };
 
       try {
         const sanitizedFile = await autoProtectAndSanitizeFile(file, {
-          onOpenEditor: () => {
+          onConfirmAuto: (sanitized) => {
+            commitDrop(sanitized || sanitizedFile);
+          },
+          onAllowPlaintext: () => {
+            commitDrop(file);
+          },
+          onCancel: () => {
+            isCommitted = true;
+          },
+          onOpenEditor: (detectedBoxes) => {
             showFileInterceptionModal({
               file,
-              initialBoxes: [],
+              initialBoxes: detectedBoxes || [],
               detectedItems: [],
               onConfirmMask: (sanitized) => {
-                const dt = new DataTransfer();
-                dt.items.add(sanitized);
-                dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                commitDrop(sanitized);
               },
               onAllowPlaintext: () => {
-                const dt = new DataTransfer();
-                dt.items.add(file);
-                dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                commitDrop(file);
               },
-              onCancel: () => {}
+              onCancel: () => {
+                isCommitted = true;
+              }
             });
           }
         });
-
-        const dt = new DataTransfer();
-        dt.items.add(sanitizedFile);
-        dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
       } catch (err) {
         console.warn('[Privora Shield] Auto-protect drop failed:', err);
       }
