@@ -142,9 +142,10 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
     if (!ctx) return;
 
     const img = new Image();
-    img.onload = () => {
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+    const render = () => {
+      if (!canvasRef.current) return;
+      canvas.width = img.naturalWidth || 800;
+      canvas.height = img.naturalHeight || 1000;
       // Always fill with clean white paper background so transparent documents never display blank
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -261,12 +262,21 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
         });
       }
     };
+
+    img.onload = render;
     img.src = previewImageUrl;
+    if (img.complete && img.naturalWidth > 0) {
+      render();
+    }
   };
 
   useEffect(() => {
-    redrawCanvas();
-  }, [previewImageUrl, detection, previewMode, selectedItemId, syntheticMappings, currentPageIndex]);
+    if (!isScanning && previewImageUrl) {
+      requestAnimationFrame(() => {
+        redrawCanvas();
+      });
+    }
+  }, [previewImageUrl, detection, previewMode, selectedItemId, syntheticMappings, currentPageIndex, isScanning]);
 
   // Convert client mouse event to canvas coordinate space
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -730,6 +740,8 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
     setDeepAiRan(false);
     setCurrentFile(file);
     setCurrentPageIndex(0);
+    setPreviewImageUrl(null);
+    setDetection(null);
 
     try {
       // 1. Run Deterministic Multi-Modal Detection (Face, OCR, Regex, EXIF, Hash)
@@ -774,6 +786,9 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+      setTimeout(() => {
+        redrawCanvas();
+      }, 50);
     }
   };
 
@@ -1925,7 +1940,10 @@ console.log("Starting secure daemon...");`;
                     </span>
                     <div className="grid grid-cols-3 gap-1 bg-[#E2E1E6]/70 p-1 rounded-xl border border-black/5">
                       <button
-                        onClick={() => setPreviewMode('ORIGINAL')}
+                        onClick={() => {
+                          setPreviewMode('ORIGINAL');
+                          requestAnimationFrame(redrawCanvas);
+                        }}
                         className={`py-1 text-xs font-medium rounded-lg transition-all ${
                           previewMode === 'ORIGINAL'
                             ? 'bg-white text-[#212529] font-bold shadow-minimal'
@@ -1935,7 +1953,10 @@ console.log("Starting secure daemon...");`;
                         Original
                       </button>
                       <button
-                        onClick={() => setPreviewMode('BLURRED_REGIONS')}
+                        onClick={() => {
+                          setPreviewMode('BLURRED_REGIONS');
+                          requestAnimationFrame(redrawCanvas);
+                        }}
                         className={`py-1 text-xs font-medium rounded-lg transition-all ${
                           previewMode === 'BLURRED_REGIONS'
                             ? 'bg-[#9C8DD4] text-white font-bold shadow-minimal'
@@ -1945,7 +1966,10 @@ console.log("Starting secure daemon...");`;
                         Masked
                       </button>
                       <button
-                        onClick={() => setPreviewMode('SYNTHETIC_DATA')}
+                        onClick={() => {
+                          setPreviewMode('SYNTHETIC_DATA');
+                          requestAnimationFrame(redrawCanvas);
+                        }}
                         className={`py-1 text-xs font-medium rounded-lg transition-all ${
                           previewMode === 'SYNTHETIC_DATA'
                             ? 'bg-[#4ADE80] text-[#14532D] font-bold shadow-minimal'
@@ -2443,7 +2467,10 @@ console.log("Starting secure daemon...");`;
             {previewImageUrl && (
               <div className="flex items-center gap-1 bg-white p-1 rounded-full border border-black/5 shadow-minimal">
                 <button
-                  onClick={() => setPreviewMode('ORIGINAL')}
+                  onClick={() => {
+                    setPreviewMode('ORIGINAL');
+                    requestAnimationFrame(redrawCanvas);
+                  }}
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
                     previewMode === 'ORIGINAL'
                       ? 'bg-[#9C8DD4] text-white font-bold'
@@ -2453,7 +2480,10 @@ console.log("Starting secure daemon...");`;
                   Original
                 </button>
                 <button
-                  onClick={() => setPreviewMode('BLURRED_REGIONS')}
+                  onClick={() => {
+                    setPreviewMode('BLURRED_REGIONS');
+                    requestAnimationFrame(redrawCanvas);
+                  }}
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
                     previewMode === 'BLURRED_REGIONS'
                       ? 'bg-[#9C8DD4] text-white font-bold'
@@ -2463,7 +2493,10 @@ console.log("Starting secure daemon...");`;
                   Masked
                 </button>
                 <button
-                  onClick={() => setPreviewMode('SYNTHETIC_DATA')}
+                  onClick={() => {
+                    setPreviewMode('SYNTHETIC_DATA');
+                    requestAnimationFrame(redrawCanvas);
+                  }}
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-all ${
                     previewMode === 'SYNTHETIC_DATA'
                       ? 'bg-[#4ADE80] text-[#14532D] font-bold'
@@ -2543,7 +2576,12 @@ console.log("Starting secure daemon...");`;
                   style={{ cursor: canvasCursor }}
                 >
                   <canvas 
-                    ref={canvasRef} 
+                    ref={(node) => {
+                      canvasRef.current = node;
+                      if (node && previewImageUrl && !isScanning) {
+                        requestAnimationFrame(() => redrawCanvas());
+                      }
+                    }} 
                     onMouseDown={handleCanvasMouseDown}
                     onMouseMove={handleCanvasMouseMove}
                     onMouseUp={handleCanvasMouseUp}
