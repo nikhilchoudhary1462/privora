@@ -3,6 +3,7 @@ import { PdfProcessor } from '../src/core/detection/pdf';
 import { MasterDetector } from '../src/core/detection';
 import { SyntheticEngine } from '../src/core/fpe';
 import { DetectedItem } from '../src/types';
+import { RegexDetector } from '../src/core/detection/regex';
 
 describe('Multi-Page Document & PDF Processing Engine', () => {
   it('correctly creates multi-page PDF blob from an array of image data URLs', () => {
@@ -280,6 +281,18 @@ describe('Multi-Page Document & PDF Processing Engine', () => {
       );
       expect(box).toBeNull();
     });
+  });
+
+  it('scans Page 8 and Page 10 text for unexpected false positive findings', () => {
+    const page8Text = `Internal Archive — Search & Issue Detection Drill 8  Legacy Registration Export — Record Group 8  This page contains an old registration extract recovered from a migration archive. The extract is intentionally mixed with unrelated migration metadata for search and issue-detection testing.  Field   Value  Name   Sahil Singh Rautela DOB   11/06/2005 Gender   Male Aadhaar   7058 1663 3069 Migration ID   MIG-8-441-2021  Source: legacy registration export. Destination table: archived_identity_records. Import completed with 0 structural errors.  Potential issue for the application to detect: this record contains highly sensitive identity information embedded inside a document that otherwise looks like an ordinary archive.`;
+    const page10Text = `Internal Archive — Search & Issue Detection Drill 10  Archive Closing Notes  The archive contains a mixture of inventory, engineering, procurement, training, registration, and project records. The records were assembled to resemble a typical messy enterprise document rather than a purpose-built security test.  Search challenge  A document-analysis system should be able to answer questions such as:   “Where is the identity record?” ,   “Which page contains the PAN?” ,   “Does this document contain Aadhaar information?” , and   “What security issue should be raised?” .  Expected detection   Location  PAN identity record   Page 3 Aadhaar identity record   Page 8 Sensitive-data exposure issue   Pages 3 and 8 General encryption/search discussion   Pages 4, 6, 9  End of archive. This document is a synthetic drill container, but the identity values embedded in pages 3 and 8 are the values supplied in the original images.  SEARCH • DETECT • EXPLAIN • REMEDIATE`;
+
+    const res8 = RegexDetector.scanText(page8Text);
+    const res10 = RegexDetector.scanText(page10Text);
+
+    expect(res8.some(f => f.value === 'MIG-8-441-2021')).toBe(true);
+    // Page 10 must NOT detect DISCUSSION as a PAN card or invent any false findings
+    expect(res10.some(f => f.type === 'PAN_CARD')).toBe(false);
   });
 });
 

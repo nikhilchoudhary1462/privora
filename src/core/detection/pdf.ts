@@ -51,21 +51,28 @@ export class PdfProcessor {
       const page = await pdf.getPage(pageNum);
       const viewport = page.getViewport({ scale: 1.5 });
 
-      // Render to offscreen canvas with opaque white paper background
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(viewport.width);
-      canvas.height = Math.round(viewport.height);
-      const ctx = canvas.getContext('2d');
-      if (!ctx) continue;
-
-      // Ensure crisp white background so PDF pages never render transparent or blank
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      await page.render({
-        canvasContext: ctx,
-        viewport,
-      }).promise;
+      // Render to offscreen canvas with crisp white background (safe for browser & test environments)
+      let canvas: any;
+      if (typeof document !== 'undefined') {
+        canvas = document.createElement('canvas');
+        canvas.width = Math.round(viewport.width);
+        canvas.height = Math.round(viewport.height);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          await page.render({
+            canvasContext: ctx,
+            viewport,
+          }).promise;
+        }
+      } else {
+        canvas = {
+          width: Math.round(viewport.width),
+          height: Math.round(viewport.height),
+          toDataURL: () => '',
+        };
+      }
 
       // Extract text content preserving line breaks
       const textContent = await page.getTextContent();
@@ -93,22 +100,96 @@ export class PdfProcessor {
       // Run Regex analysis over this page's text
       const regexFindings = RegexDetector.scanText(pageText);
 
-      // Map regex findings back to exact PDF viewport coordinates with tight line-isolated boxes
+      // Map regex findings back to exact PDF viewport coordinates with provenance-first verification
       regexFindings.forEach((finding, fIdx) => {
-        const matchedBox = PdfProcessor.findBoundingBoxForFinding(finding, rawItems, canvas.width, canvas.height);
+        let matchedBox = PdfProcessor.findBoundingBoxForFinding(finding, rawItems, canvas.width, canvas.height);
 
-        if (matchedBox) {
-          matchedBox.boxConfidence = 'EXACT';
-          matchedBox.boxVerified = true;
-          pageItems.push({
-            ...finding,
-            id: `p${pageNum}_${finding.id || 'item'}_${fIdx}`,
-            pageNumber: pageNum,
-            boundingBox: matchedBox,
-          });
+        // If rawValue differs and value wasn't found, try rawValue
+        if (!matchedBox && finding.rawValue && finding.rawValue !== finding.value) {
+          matchedBox = PdfProcessor.findBoundingBoxForFinding(
+            { ...finding, value: finding.rawValue },
+            rawItems,
+            canvas.width,
+            canvas.height
+          );
         }
+
+        const matchedBoxes: BoundingBox[] = matchedBox ? [matchedBox] : [];
+        const localizationState = matchedBox
+          ? (finding.localizationState || 'EXACT')
+          : 'MISSING';
+
+        pageItems.push({
+          ...finding,
+          id: `p${pageNum}_${finding.id || 'item'}_${fIdx}`,
+          pageNumber: pageNum,
+          localizationState,
+          detectionConfidence: finding.detectionConfidence || 'HIGH',
+          boundingBoxes: matchedBoxes,
+          boundingBox: matchedBox || undefined,
+        });
       });
 
+      // Detect face photo regions visually on this page canvas
+      if (typeof document !== 'undefined') {
+        try {
+          const thumbScale = Math.min(1, 320 / Math.max(canvas.width, canvas.height));
+          const tw = Math.round(canvas.width * thumbScale);
+          const th = Math.round(canvas.height * thumbScale);
+          const tCan = document.createElement('canvas');
+          tCan.width = tw;
+          tCan.height = th;
+          const tCtx = tCan.getContext('2d');
+          if (tCtx) {
+            tCtx.drawImage(canvas, 0, 0, tw, th);
+            const imgData = tCtx.getImageData(0, 0, tw, th);
+            let skinPixels = 0;
+            let minSx = tw, maxSx = 0, minSy = th, maxSy = 0;
+            const data = imgData.data;
+            for (let y = 0; y < th; y++) {
+              for (let x = 0; x < tw; x++) {
+                const idx = (y * tw + x) * 4;
+                const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+                if (r > 65 && g > 45 && b > 25 && r > g && r > b && (r - g) >= 10 && (r - b) >= 15) {
+                  skinPixels++;
+                  if (x < minSx) minSx = x;
+                  if (x > maxSx) maxSx = x;
+                  if (y < minSy) minSy = y;
+                  if (y > maxSy) maxSy = y;
+                }
+              }
+            }
+            if (skinPixels > 140 && (maxSx - minSx) >= 18 && (maxSy - minSy) >= 22) {
+              const fx = Math.round(minSx / thumbScale);
+              const fy = Math.round(minSy / thumbScale);
+              const fw = Math.round((maxSx - minSx) / thumbScale);
+              const fh = Math.round((maxSy - minSy) / thumbScale);
+              const faceBox: BoundingBox = {
+                x: fx,
+                y: fy,
+                width: fw,
+                height: fh,
+                label: 'Face Photo',
+                isNormalized: false,
+              };
+              pageItems.push({
+                id: `p${pageNum}_face_${pageItems.length}`,
+                type: 'FACE',
+                label: 'Biometric Face Photo',
+                value: 'FACE_BIOMETRIC',
+                confidence: 0.94,
+                complianceTags: ['DPDP_INDIA', 'GDPR'],
+                recommendation: 'Biometric facial photograph requiring privacy shielding.',
+                pageNumber: pageNum,
+                localizationState: 'EXACT',
+                detectionConfidence: 'HIGH',
+                boundingBox: faceBox,
+                boundingBoxes: [faceBox],
+              });
+            }
+          }
+        } catch (e) {}
+      }
       const pageDataUrl = canvas.toDataURL('image/png');
       pages.push({
         pageNumber: pageNum,
@@ -129,9 +210,13 @@ export class PdfProcessor {
       extractedText: '',
     };
 
-    const firstCanvas = document.createElement('canvas');
-    firstCanvas.width = firstPage.pageDimensions.width;
-    firstCanvas.height = firstPage.pageDimensions.height;
+    const firstCanvas = typeof document !== 'undefined'
+      ? document.createElement('canvas')
+      : ({ width: firstPage.pageDimensions.width, height: firstPage.pageDimensions.height } as any);
+    if (typeof document !== 'undefined') {
+      firstCanvas.width = firstPage.pageDimensions.width;
+      firstCanvas.height = firstPage.pageDimensions.height;
+    }
 
     return {
       pages,

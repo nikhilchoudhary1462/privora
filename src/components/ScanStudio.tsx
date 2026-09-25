@@ -1163,10 +1163,10 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
         case 'ENCRYPT_REGION': {
           // Execution Gate Matrix: Prevent fail-open leakage of detected sensitive PII
           const unverifiedEstimated = detection.detectedItems.filter(
-            i => i.boundingBox?.boxConfidence === 'ESTIMATED' && !i.boundingBox.boxVerified
+            i => (i.localizationState === 'AMBIGUOUS' || i.boundingBox?.boxConfidence === 'ESTIMATED') && !i.boundingBox?.boxVerified
           );
           const missingSpatial = detection.detectedItems.filter(
-            i => !i.boundingBox || i.boundingBox.boxConfidence === 'MISSING' || (i.boundingBox.width === 0 && i.boundingBox.height === 0)
+            i => i.localizationState === 'MISSING' || !i.boundingBox || i.boundingBox?.boxConfidence === 'MISSING' || (i.boundingBox.width === 0 && i.boundingBox.height === 0)
           );
 
           if (unverifiedEstimated.length > 0) {
@@ -2056,7 +2056,17 @@ console.log("Starting secure daemon...");`;
                                   <ShieldAlert className="w-3.5 h-3.5 text-[#9C8DD4] shrink-0" />
                                 )}
                                 <span className="truncate">{item.label}</span>
-                                {item.boundingBox?.boxConfidence === 'ESTIMATED' && (
+                                {item.localizationState === 'ANCHORED' && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-indigo-100 text-indigo-800 font-sans font-bold shrink-0">
+                                    ⚓ Anchored
+                                  </span>
+                                )}
+                                {item.localizationState === 'DERIVED' && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-sky-100 text-sky-800 font-sans font-bold shrink-0">
+                                    🔧 Repaired
+                                  </span>
+                                )}
+                                {(item.localizationState === 'AMBIGUOUS' || item.boundingBox?.boxConfidence === 'ESTIMATED') && (
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -2064,18 +2074,18 @@ console.log("Starting secure daemon...");`;
                                       handleVerifyEstimatedBox(item.id);
                                     }}
                                     className={`px-1.5 py-0.5 rounded text-[9px] font-sans font-bold shrink-0 ${
-                                      item.boundingBox.boxVerified
+                                      item.boundingBox?.boxVerified
                                         ? 'bg-emerald-100 text-emerald-700'
                                         : 'bg-amber-100 text-amber-800 animate-pulse hover:bg-amber-200'
                                     }`}
-                                    title={item.boundingBox.boxVerified ? "Position verified" : "Click to verify estimated position"}
+                                    title={item.boundingBox?.boxVerified ? "Position verified" : "Click to verify estimated position"}
                                   >
-                                    {item.boundingBox.boxVerified ? '✓ Verified' : '⚠️ Verify'}
+                                    {item.boundingBox?.boxVerified ? '✓ Verified' : '⚠️ Verify'}
                                   </button>
                                 )}
-                                {item.boundingBox?.boxConfidence === 'MISSING' && (
-                                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-red-100 text-red-800 font-sans font-bold shrink-0">
-                                    No Box
+                                {(item.localizationState === 'MISSING' || (!item.boundingBox && !item.boundingBoxes?.length)) && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-red-100 text-red-800 font-sans font-bold shrink-0" title="Detected in text, but spatial location could not be confirmed. Manual box required.">
+                                    📍 Missing Box
                                   </span>
                                 )}
                               </div>

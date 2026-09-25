@@ -313,7 +313,7 @@ export class OcrEngine {
         }
       }
 
-      // 3. Bounding Box Assignment & Confidence
+      // 3. Bounding Box Assignment & Provenance-Based Localization
       if (bestMatchBoxes && bestMatchBoxes.length > 0) {
         bestMatchBoxes.forEach(b => usedWordBoxes.add(b));
 
@@ -336,46 +336,25 @@ export class OcrEngine {
         const boxY = Math.max(0, Math.min(origHeight - 1, minY - padY));
         const boxH = Math.max(1, Math.min(origHeight - boxY, (maxY - minY) + padY * 2));
 
-        item.boundingBox = {
+        const resolvedBox: BoundingBox = {
           x: boxX,
           y: boxY,
           width: boxW,
           height: boxH,
           label: `${item.label}: ${item.value}`,
           isNormalized: false,
-          boxConfidence: 'EXACT',
-          boxVerified: true,
+          tokenIds: bestMatchBoxes.map(b => b.text),
         };
+
+        item.boundingBox = resolvedBox;
+        item.boundingBoxes = [resolvedBox];
+        item.localizationState = item.localizationState || 'EXACT';
       } else {
-        // High-Risk PII Guard: NEVER let an entity silently disappear because spatial mapping failed
-        const isHighRisk = ['PAN_CARD', 'AADHAAR', 'SSN', 'CREDIT_CARD', 'PASSPORT'].includes(item.type);
-
-        // Attempt estimated line box if there's any roughly matching line
-        const candidateLine = lines.length > 0 ? lines[Math.min(lines.length - 1, Math.floor(lines.length / 2))] : null;
-
-        if (isHighRisk && candidateLine) {
-          item.boundingBox = {
-            x: Math.round(origWidth * 0.08),
-            y: Math.max(0, Math.min(origHeight - 36, candidateLine.avgY - 4)),
-            width: Math.round(origWidth * 0.84),
-            height: Math.max(28, Math.round(candidateLine.avgH + 12)),
-            label: `${item.label}: ${item.value} [ESTIMATED REGION]`,
-            isNormalized: false,
-            boxConfidence: 'ESTIMATED',
-            boxVerified: false,
-          };
-        } else if (isHighRisk) {
-          item.boundingBox = {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-            label: `${item.label}: ${item.value} [MISSING SPATIAL REGION]`,
-            isNormalized: false,
-            boxConfidence: 'MISSING',
-            boxVerified: false,
-          };
-        }
+        // Hard Invariant: No redaction bounding box without source-token evidence.
+        // Never invent an arbitrary rectangle across the canvas.
+        item.boundingBox = undefined;
+        item.boundingBoxes = [];
+        item.localizationState = 'MISSING';
       }
     }
 

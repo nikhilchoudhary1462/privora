@@ -15,43 +15,77 @@ export class RegexDetector {
     return validateLuhn(numStr);
   }
 
-  // Positional PAN candidate normalization strictly by character class
-  public static normalizePanCandidate(str: string): { normalized: string; wasCorrected: boolean } | null {
+  // Positional PAN candidate normalization strictly by schema class with genuine digit requirement
+  public static normalizePanCandidate(str: string): { 
+    rawValue: string;
+    normalized: string; 
+    wasCorrected: boolean; 
+    editCount: number;
+    detectionConfidence: 'HIGH' | 'MEDIUM';
+  } | null {
     if (!str) return null;
     const clean = str.replace(/[-\s]/g, '').toUpperCase();
     if (clean.length !== 10) return null;
 
-    let wasCorrected = false;
+    // Hard Gate: Positions 6-9 must contain AT LEAST 1 genuine digit before any repair is allowed.
+    // An all-alpha word (e.g. "DISCUSSION", "DEPARTMENT") has 0 digits and must be rejected immediately.
+    let genuineDigits = 0;
+    for (let i = 5; i < 9; i++) {
+      if (/^[0-9]$/.test(clean[i])) {
+        genuineDigits++;
+      }
+    }
+    if (genuineDigits === 0) {
+      return null;
+    }
+
+    let editCount = 0;
     const chars = clean.split('');
 
     // Positions 1–5: Expected letters (A-Z)
     for (let i = 0; i < 5; i++) {
       const c = chars[i];
-      if (c === '0') { chars[i] = 'O'; wasCorrected = true; }
-      else if (c === '1') { chars[i] = 'I'; wasCorrected = true; }
-      else if (c === '8') { chars[i] = 'B'; wasCorrected = true; }
+      if (c === '0') { chars[i] = 'O'; editCount++; }
+      else if (c === '1') { chars[i] = 'I'; editCount++; }
+      else if (c === '8') { chars[i] = 'B'; editCount++; }
       else if (!/^[A-Z]$/.test(chars[i])) return null;
     }
 
     // Positions 6–9: Expected digits (0-9)
     for (let i = 5; i < 9; i++) {
       const c = chars[i];
-      if (c === 'O') { chars[i] = '0'; wasCorrected = true; }
-      else if (c === 'I' || c === 'L') { chars[i] = '1'; wasCorrected = true; }
-      else if (c === 'B') { chars[i] = '8'; wasCorrected = true; }
-      else if (c === 'S') { chars[i] = '5'; wasCorrected = true; }
-      else if (c === 'Z') { chars[i] = '2'; wasCorrected = true; }
+      if (c === 'O' || c === 'D' || c === 'Q') { chars[i] = '0'; editCount++; }
+      else if (c === 'I' || c === 'L') { chars[i] = '1'; editCount++; }
+      else if (c === 'B') { chars[i] = '8'; editCount++; }
+      else if (c === 'S') { chars[i] = '5'; editCount++; }
+      else if (c === 'Z') { chars[i] = '2'; editCount++; }
+      else if (c === 'G') { chars[i] = '6'; editCount++; }
       else if (!/^[0-9]$/.test(chars[i])) return null;
     }
 
     // Position 10: Expected letter (A-Z)
     const c10 = chars[9];
-    if (c10 === '0') { chars[9] = 'O'; wasCorrected = true; }
-    else if (c10 === '1') { chars[9] = 'I'; wasCorrected = true; }
+    if (c10 === '0') { chars[9] = 'O'; editCount++; }
+    else if (c10 === '1') { chars[9] = 'I'; editCount++; }
     else if (!/^[A-Z]$/.test(chars[9])) return null;
 
+    // Budget Rule:
+    // 0 edits: strict match (HIGH)
+    // 1 edit: supported repair (HIGH)
+    // 2 edits: review required (MEDIUM)
+    // >= 3 edits: reject
+    if (editCount >= 3) {
+      return null;
+    }
+
     const normalized = chars.join('');
-    return { normalized, wasCorrected };
+    return {
+      rawValue: str.trim(),
+      normalized,
+      wasCorrected: editCount > 0,
+      editCount,
+      detectionConfidence: editCount <= 1 && genuineDigits >= 2 ? 'HIGH' : 'MEDIUM',
+    };
   }
 
   // Strict PAN validation (official government format: 5 uppercase letters, 4 digits, 1 uppercase letter)
@@ -177,6 +211,11 @@ export class RegexDetector {
           type: 'PAN_CARD',
           label: panResult.wasCorrected ? 'PAN Card (OCR Repaired)' : 'PAN Card',
           value: panResult.normalized,
+          rawValue: panResult.rawValue,
+          normalizedValue: panResult.normalized,
+          editCount: panResult.editCount,
+          detectionConfidence: panResult.detectionConfidence,
+          localizationState: panResult.wasCorrected ? 'DERIVED' : 'EXACT',
           confidence: panResult.wasCorrected ? 0.92 : 0.99,
           complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
           recommendation: 'Selective region blur or envelope encryption mandated by DPDP Act 2023.',
@@ -509,6 +548,51 @@ export class RegexDetector {
         complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
         recommendation: 'Motor vehicle driving license document.',
       });
+    }
+
+    // 18. Contextual Migration, Tracking, and Record IDs (Label-Anchored)
+    // E.g. "Migration ID: MIG-8-441-2021", "Record ID: REC-992-X", "Reference No: REF-2024-001"
+    const contextualIdRegex = /(?:(Migration\s+ID|Record\s+ID|Tracking\s+ID|Certificate\s+ID|Registration\s+ID|Application\s+ID|File\s+No|Reference\s+(?:ID|No)|Ref\s+No|MIG\s+ID)\s*[:=\-]?\s*)([A-Za-z0-9]{2,6}[-#_][A-Za-z0-9]{1,6}[-#_][A-Za-z0-9]{1,8}(?:[-#_][A-Za-z0-9]{1,8})?)/gi;
+    while ((match = contextualIdRegex.exec(text)) !== null) {
+      const anchorLabel = match[1]?.trim();
+      const idVal = match[2]?.trim();
+      if (idVal && idVal.length >= 6 && /\d/.test(idVal) && /[A-Za-z]/.test(idVal)) {
+        if (!results.some(r => r.value === idVal)) {
+          results.push({
+            id: `pii_record_id_${idCounter++}`,
+            type: 'GOVERNMENT_ID',
+            label: `${anchorLabel}`,
+            value: idVal,
+            rawValue: idVal,
+            anchorLabel,
+            confidence: 0.95,
+            detectionConfidence: 'HIGH',
+            localizationState: 'ANCHORED',
+            complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
+            recommendation: `Contextually anchored ${anchorLabel} contains sensitive tracking provenance.`,
+          });
+        }
+      }
+    }
+
+    // 19. Segmented Alphanumeric Enterprise Identifiers with known prefixes (MIG-, VND-, REF-, REG-)
+    const standaloneEnterpriseIdRegex = /\b((?:MIG|VND|REF|REG|SYS|USR)[-#_]\d{1,4}[-#_][A-Za-z0-9]{1,6}(?:[-#_][A-Za-z0-9]{1,8})?)\b/g;
+    while ((match = standaloneEnterpriseIdRegex.exec(text)) !== null) {
+      const val = match[1]?.trim();
+      if (val && !results.some(r => r.value === val)) {
+        results.push({
+          id: `pii_record_token_${idCounter++}`,
+          type: 'GOVERNMENT_ID',
+          label: 'Record Identifier Token',
+          value: val,
+          rawValue: val,
+          confidence: 0.90,
+          detectionConfidence: 'HIGH',
+          localizationState: 'ANCHORED',
+          complianceTags: ['DPDP_INDIA'],
+          recommendation: 'Structured enterprise record identifier requiring redaction.',
+        });
+      }
     }
 
     return results;

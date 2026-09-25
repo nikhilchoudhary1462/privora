@@ -1,3 +1,13 @@
+export type LocalizationState =
+  | 'EXACT'       // Exact token span match, punctuation/whitespace normalized only
+  | 'DERIVED'     // Validated OCR repair with bounded edit script (≤ 1-2 edits)
+  | 'ANCHORED'    // Found via label proximity window (e.g., "Migration ID: ...")
+  | 'AMBIGUOUS'   // Multiple plausible disjoint locations; held for user selection
+  | 'MISSING'     // Detected in text stream, but spatial evidence cannot be localized
+  | 'REJECTED';   // Spatial candidate failed geometric sanity checks
+
+export type DetectionConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
 export type BoundingBoxConfidence = 'EXACT' | 'ESTIMATED' | 'MISSING';
 
 export interface BoundingBox {
@@ -7,6 +17,8 @@ export interface BoundingBox {
   height: number;
   label?: string;
   isNormalized?: boolean;
+  tokenIds?: string[];
+  // Backwards compatibility helpers
   boxConfidence?: BoundingBoxConfidence;
   boxVerified?: boolean;
 }
@@ -50,11 +62,18 @@ export interface DetectedItem {
   type: PiiType;
   label: string;
   value: string;
-  confidence: number; // 0..1
-  boundingBox?: BoundingBox;
+  rawValue?: string;               // Unaltered source string from document
+  normalizedValue?: string;        // Normalized / repaired canonical string
+  editCount?: number;              // Number of OCR repairs applied (0 = exact)
+  detectionConfidence?: DetectionConfidence; // HIGH | MEDIUM | LOW
+  localizationState?: LocalizationState;     // EXACT | DERIVED | ANCHORED | AMBIGUOUS | MISSING | REJECTED
+  confidence: number;              // 0..1 composite score
+  boundingBox?: BoundingBox;       // Primary bounding box (if localized)
+  boundingBoxes?: BoundingBox[];   // Canonical list for multi-occurrence
+  anchorLabel?: string;            // Contextual label if anchored (e.g. "Migration ID")
   complianceTags: ComplianceStandard[];
   recommendation: string;
-  pageNumber?: number; // 1-indexed for multi-page documents (PDFs, text pages)
+  pageNumber?: number;             // 1-indexed for multi-page documents (PDFs, text pages)
   source?: DetectionSource;
 }
 
