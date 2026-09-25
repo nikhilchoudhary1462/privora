@@ -1646,17 +1646,34 @@
             maskedCanvases.push(maskedCanvas);
             allPdfPages.push({
               pageNum: pNum,
-              canvas: pCanvas,
               pageDataUrl: pCanvas.toDataURL('image/jpeg', 0.85),
+              width: pCanvas.width,
+              height: pCanvas.height,
               text: pageText,
               boxes: pageBoxes,
               detectedPii: piiItems
             });
+
+            // Reclaim pCanvas memory immediately
+            pCanvas.width = 0;
+            pCanvas.height = 0;
           }
 
-          // Build encrypted PDF blob
+          // Compute preview image and dimensions before clearing canvases
+          const previewPageIdx = allPdfPages.findIndex(p => p.boxes.length > 0);
+          const previewCanvas = maskedCanvases[previewPageIdx >= 0 ? previewPageIdx : 0] || maskedCanvases[0];
+          const maskedDataUrl = previewCanvas ? previewCanvas.toDataURL('image/jpeg', 0.82) : '';
+          const origW = maskedCanvases[0]?.width || 800;
+          const origH = maskedCanvases[0]?.height || 1000;
+
+          // Build encrypted PDF blob using jsPDF
           const maskedPdfBlob = createPdfBlobFromCanvases(maskedCanvases);
           const sanitizedPdfFile = new File([maskedPdfBlob], file.name, { type: 'application/pdf' });
+
+          // Free all masked canvases immediately to reclaim RAM
+          maskedCanvases.forEach(mc => {
+            try { mc.width = 0; mc.height = 0; } catch (e) {}
+          });
 
           const rawBuffer = await file.arrayBuffer();
           const origHash = await computeSHA256(rawBuffer);
@@ -1664,8 +1681,8 @@
             id: 'aegis_' + Date.now(),
             fileName: file.name,
             baseName: file.name.replace(/\.[^/.]+$/, ''),
-            originalWidth: maskedCanvases[0]?.width || 800,
-            originalHeight: maskedCanvases[0]?.height || 1000,
+            originalWidth: origW,
+            originalHeight: origH,
             originalFileSize: file.size,
             maskedFileSize: maskedPdfBlob.size,
             origHash,
@@ -1677,10 +1694,6 @@
             hostname: window.location.hostname,
           };
           saveManifest(manifest);
-
-          const previewPageIdx = allPdfPages.findIndex(p => p.boxes.length > 0);
-          const previewCanvas = maskedCanvases[previewPageIdx >= 0 ? previewPageIdx : 0] || maskedCanvases[0];
-          const maskedDataUrl = previewCanvas ? previewCanvas.toDataURL('image/jpeg', 0.82) : '';
 
           showEncryptedImagePreviewCard({
             file,
@@ -1892,9 +1905,57 @@
   }
 
   // -------------------------------------------------------------
-  // 4b. Standard Multi-Page & Single-Page PDF 1.4 Binary Generator
+  // 4b. Standard Multi-Page & Single-Page PDF Generator (Powered by jsPDF with fallback)
   // -------------------------------------------------------------
+  function getJsPdfInstance() {
+    return (typeof window !== 'undefined' && window.jspdf && window.jspdf.jsPDF) ||
+           (typeof window !== 'undefined' && window.jsPDF) ||
+           (typeof self !== 'undefined' && self.jspdf && self.jspdf.jsPDF) ||
+           (typeof self !== 'undefined' && self.jsPDF) ||
+           (typeof globalThis !== 'undefined' && globalThis.jspdf && globalThis.jspdf.jsPDF) ||
+           null;
+  }
+
   function createPdfBlobFromCanvases(canvasList) {
+    if (!canvasList || canvasList.length === 0) return null;
+
+    const JsPDF = getJsPdfInstance();
+    if (JsPDF) {
+      try {
+        const first = canvasList[0];
+        const w0 = first.width || 800;
+        const h0 = first.height || 1000;
+        const orientation = w0 > h0 ? 'landscape' : 'portrait';
+
+        const doc = new JsPDF({
+          orientation,
+          unit: 'px',
+          format: [w0, h0],
+          compress: true,
+          hotfixes: ['px_scaling'],
+        });
+
+        canvasList.forEach((c, idx) => {
+          const cw = c.width || 800;
+          const ch = c.height || 1000;
+          if (idx > 0) {
+            const pageOrientation = cw > ch ? 'landscape' : 'portrait';
+            doc.addPage([cw, ch], pageOrientation);
+          }
+          const imgData = c.toDataURL('image/jpeg', 0.85);
+          doc.addImage(imgData, 'JPEG', 0, 0, cw, ch, undefined, 'FAST');
+        });
+
+        return doc.output('blob');
+      } catch (err) {
+        console.warn('[Privora Shield] jsPDF generation error, trying fallback binary generator:', err);
+      }
+    }
+
+    return createPdfBlobFromCanvasesFallback(canvasList);
+  }
+
+  function createPdfBlobFromCanvasesFallback(canvasList) {
     if (!canvasList || canvasList.length === 0) return null;
     const numPages = canvasList.length;
 
@@ -2362,12 +2423,17 @@
 
             pdfPages.push({
               pageNum: pNum,
-              canvas: pCanvas,
               pageDataUrl: pCanvas.toDataURL('image/jpeg', 0.85),
+              width: Math.round(viewport.width),
+              height: Math.round(viewport.height),
               text: pageText,
               boxes: pageBoxes,
               detectedPii: piiItems
             });
+
+            // Reclaim pCanvas memory immediately
+            pCanvas.width = 0;
+            pCanvas.height = 0;
           }
         } catch (pdfErr) {
           console.warn('PDF.js in-extension error:', pdfErr);
@@ -2376,8 +2442,8 @@
 
       if (pdfPages.length > 0) {
         currentBoxes = [...pdfPages[0].boxes];
-        canvas.width = pdfPages[0].canvas.width;
-        canvas.height = pdfPages[0].canvas.height;
+        canvas.width = pdfPages[0].width || (pdfPages[0].canvas ? pdfPages[0].canvas.width : 800);
+        canvas.height = pdfPages[0].height || (pdfPages[0].canvas ? pdfPages[0].canvas.height : 1000);
         await new Promise((resolve) => {
           baseImage.onload = () => {
             renderCanvas();
@@ -2401,11 +2467,12 @@
             pdfPages[currentPdfPageIdx].boxes = [...currentBoxes];
             currentPdfPageIdx = targetIdx;
             currentBoxes = [...pdfPages[targetIdx].boxes];
-            canvas.width = pdfPages[targetIdx].canvas.width;
-            canvas.height = pdfPages[targetIdx].canvas.height;
+            const p = pdfPages[targetIdx];
+            canvas.width = p.width || (p.canvas ? p.canvas.width : 800);
+            canvas.height = p.height || (p.canvas ? p.canvas.height : 1000);
             baseImage = new Image();
             baseImage.onload = () => renderCanvas();
-            baseImage.src = pdfPages[targetIdx].pageDataUrl;
+            baseImage.src = p.pageDataUrl;
             updatePageNavUI();
           };
 
@@ -2996,36 +3063,53 @@
       // 1. Extract raw unblurred slices for auto-restoration
       if (isPdf && pdfPages && pdfPages.length > 0) {
         pdfPages[currentPdfPageIdx].boxes = [...currentBoxes];
-        pdfPages.forEach((p, pIdx) => {
-          (p.boxes || []).forEach((box) => {
-            const cropCanvas = document.createElement('canvas');
-            cropCanvas.width = Math.max(1, Math.round(box.width));
-            cropCanvas.height = Math.max(1, Math.round(box.height));
-            const cCtx = cropCanvas.getContext('2d');
-            if (cCtx) {
-              cCtx.drawImage(
-                p.canvas,
-                Math.round(box.x),
-                Math.round(box.y),
-                Math.round(box.width),
-                Math.round(box.height),
-                0,
-                0,
-                cropCanvas.width,
-                cropCanvas.height
-              );
-              unblurredSlices.push({
-                pageNum: p.pageNum || (pIdx + 1),
-                normX: box.x / p.canvas.width,
-                normY: box.y / p.canvas.height,
-                normW: box.width / p.canvas.width,
-                normH: box.height / p.canvas.height,
-                cropDataUrl: cropCanvas.toDataURL('image/jpeg', 0.88),
-                label: box.label || 'Protected Piece',
-              });
-            }
-          });
-        });
+        for (let pIdx = 0; pIdx < pdfPages.length; pIdx++) {
+          const p = pdfPages[pIdx];
+          const pw = p.width || (p.canvas ? p.canvas.width : 800);
+          const ph = p.height || (p.canvas ? p.canvas.height : 1000);
+          const pNum = p.pageNum || (pIdx + 1);
+
+          let pImg = null;
+          if (p.canvas && p.canvas.width > 0) {
+            pImg = p.canvas;
+          } else if (p.pageDataUrl) {
+            pImg = new Image();
+            await new Promise((r) => { pImg.onload = r; pImg.onerror = r; pImg.src = p.pageDataUrl; });
+          }
+
+          if (pImg) {
+            (p.boxes || []).forEach((box) => {
+              const cropCanvas = document.createElement('canvas');
+              cropCanvas.width = Math.max(1, Math.round(box.width));
+              cropCanvas.height = Math.max(1, Math.round(box.height));
+              const cCtx = cropCanvas.getContext('2d');
+              if (cCtx) {
+                cCtx.drawImage(
+                  pImg,
+                  Math.round(box.x),
+                  Math.round(box.y),
+                  Math.round(box.width),
+                  Math.round(box.height),
+                  0,
+                  0,
+                  cropCanvas.width,
+                  cropCanvas.height
+                );
+                unblurredSlices.push({
+                  pageNum: pNum,
+                  normX: box.x / pw,
+                  normY: box.y / ph,
+                  normW: box.width / pw,
+                  normH: box.height / ph,
+                  cropDataUrl: cropCanvas.toDataURL('image/jpeg', 0.88),
+                  label: box.label || 'Protected Piece',
+                });
+                cropCanvas.width = 0;
+                cropCanvas.height = 0;
+              }
+            });
+          }
+        }
       } else if (baseImage && baseImage.complete && baseImage.naturalWidth > 0) {
         currentBoxes.forEach((box) => {
           const cropCanvas = document.createElement('canvas');
@@ -3052,6 +3136,8 @@
               cropDataUrl: cropCanvas.toDataURL('image/png'),
               label: box.label || 'Protected Piece',
             });
+            cropCanvas.width = 0;
+            cropCanvas.height = 0;
           }
         });
       }
@@ -3064,15 +3150,28 @@
         if (pdfPages.length > 0) {
           pdfPages[currentPdfPageIdx].boxes = [...currentBoxes];
           const maskedCanvases = [];
-          for (const p of pdfPages) {
+          for (let pIdx = 0; pIdx < pdfPages.length; pIdx++) {
+            const p = pdfPages[pIdx];
+            const pw = p.width || (p.canvas ? p.canvas.width : 800);
+            const ph = p.height || (p.canvas ? p.canvas.height : 1000);
+
             const mc = document.createElement('canvas');
-            mc.width = p.canvas.width;
-            mc.height = p.canvas.height;
+            mc.width = pw;
+            mc.height = ph;
             const mCtx = mc.getContext('2d');
-            mCtx.drawImage(p.canvas, 0, 0);
+            mCtx.fillStyle = '#FFFFFF';
+            mCtx.fillRect(0, 0, pw, ph);
+
+            if (p.canvas && p.canvas.width > 0) {
+              mCtx.drawImage(p.canvas, 0, 0);
+            } else if (p.pageDataUrl) {
+              const img = new Image();
+              await new Promise((r) => { img.onload = r; img.onerror = r; img.src = p.pageDataUrl; });
+              mCtx.drawImage(img, 0, 0, pw, ph);
+            }
 
             // Apply synthetic checkerboard mask for each box on this page
-            p.boxes.forEach((box) => {
+            (p.boxes || []).forEach((box) => {
               const bx = Math.max(0, Math.round(box.x));
               const by = Math.max(0, Math.round(box.y));
               const bw = Math.min(mc.width - bx, Math.round(box.width));
@@ -3102,6 +3201,10 @@
             maskedCanvases.push(mc);
           }
           pdfBlob = createPdfBlobFromCanvases(maskedCanvases);
+          // Zero maskedCanvases immediately to free RAM
+          maskedCanvases.forEach(mc => {
+            try { mc.width = 0; mc.height = 0; } catch (e) {}
+          });
         } else {
           pdfBlob = createPdfBlobFromCanvas(canvas);
         }
@@ -3541,6 +3644,10 @@
       }
 
       const restoredPdfBlob = createPdfBlobFromCanvases(restoredCanvases);
+      // Clean up canvases immediately to reclaim RAM
+      restoredCanvases.forEach(rc => {
+        try { rc.width = 0; rc.height = 0; } catch (e) {}
+      });
       if (!restoredPdfBlob) return null;
 
       return {
