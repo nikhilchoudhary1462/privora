@@ -191,5 +191,95 @@ describe('Multi-Page Document & PDF Processing Engine', () => {
     expect(matchedBox.x).toBe(236); // 240 - 4
     expect(matchedBox.width).toBeGreaterThanOrEqual(81); // spans 240 to 321 + padding
   });
+
+  describe('PDF Bounding Box Precision & Isolation (Anti-Blob Guarantee)', () => {
+    const mockRawItems = [
+      // Row 1: Y = 400 (tx = 50, ty = 400)
+      { str: 'Full Name', transform: [10, 0, 0, 10, 50, 400], width: 60, height: 12 },
+      { str: 'Aarav Mehta', transform: [10, 0, 0, 10, 200, 400], width: 80, height: 12 },
+
+      // Row 2: Y = 360 (tx = 50, ty = 360)
+      { str: 'Date of Birth', transform: [10, 0, 0, 10, 50, 360], width: 70, height: 12 },
+      { str: '12/04/1992', transform: [10, 0, 0, 10, 200, 360], width: 65, height: 12 },
+
+      // Row 3: Y = 320 (tx = 50, ty = 320)
+      { str: 'Phone Number', transform: [10, 0, 0, 10, 50, 320], width: 75, height: 12 },
+      { str: '+91 98000 12345', transform: [10, 0, 0, 10, 200, 320], width: 95, height: 12 },
+
+      // Row 4: Y = 280 (split Aadhaar across 3 items on same line)
+      { str: 'Aadhaar UID', transform: [10, 0, 0, 10, 50, 280], width: 70, height: 12 },
+      { str: '1234 ', transform: [10, 0, 0, 10, 200, 280], width: 30, height: 12 },
+      { str: '5678 ', transform: [10, 0, 0, 10, 235, 280], width: 30, height: 12 },
+      { str: '9012', transform: [10, 0, 0, 10, 270, 280], width: 28, height: 12 },
+
+      // Row 5: Y = 240 (PAN)
+      { str: 'PAN Card', transform: [10, 0, 0, 10, 50, 240], width: 60, height: 12 },
+      { str: 'ABCDE1234F', transform: [10, 0, 0, 10, 200, 240], width: 75, height: 12 },
+    ];
+
+    it('should create tight isolated box for single item name without engulfing adjacent rows', () => {
+      const box = PdfProcessor.findBoundingBoxForFinding(
+        { type: 'NAME', label: 'Full Name', value: 'Aarav Mehta' },
+        mockRawItems,
+        800,
+        600
+      );
+
+      expect(box).not.toBeNull();
+      // Must cover Aarav Mehta only
+      expect(box!.height).toBeLessThanOrEqual(32);
+      expect(box!.width).toBeLessThan(200);
+      // Must be at expected Y coordinate (viewport.height - 400*1.5 = 600 - 600 = 0 base)
+      expect(box!.x).toBeGreaterThanOrEqual(190);
+    });
+
+    it('should resolve split 3-chunk Aadhaar strictly on same line without ballooning into column box', () => {
+      const box = PdfProcessor.findBoundingBoxForFinding(
+        { type: 'AADHAAR', label: 'Aadhaar UID', value: '1234 5678 9012' },
+        mockRawItems,
+        800,
+        600
+      );
+
+      expect(box).not.toBeNull();
+      // Must be strictly single-line height
+      expect(box!.height).toBeLessThanOrEqual(32);
+      // Width spans from 200 to 270+28 (approx 100-160px), NEVER the whole column or page
+      expect(box!.width).toBeLessThan(200);
+      expect(box!.width).toBeGreaterThanOrEqual(60);
+    });
+
+    it('should NEVER merge separate row findings into a column-spanning giant rectangle', () => {
+      const nameBox = PdfProcessor.findBoundingBoxForFinding(
+        { type: 'NAME', label: 'Name', value: 'Aarav Mehta' },
+        mockRawItems,
+        800,
+        600
+      );
+      const panBox = PdfProcessor.findBoundingBoxForFinding(
+        { type: 'PAN_CARD', label: 'PAN', value: 'ABCDE1234F' },
+        mockRawItems,
+        800,
+        600
+      );
+
+      expect(nameBox).not.toBeNull();
+      expect(panBox).not.toBeNull();
+      // Verify both have tight heights and do NOT overlap vertically
+      expect(nameBox!.height).toBeLessThanOrEqual(32);
+      expect(panBox!.height).toBeLessThanOrEqual(32);
+      expect(Math.abs(nameBox!.y - panBox!.y)).toBeGreaterThan(50);
+    });
+
+    it('should return null when value is not on the page instead of fabricating an 80% width box', () => {
+      const box = PdfProcessor.findBoundingBoxForFinding(
+        { type: 'PASSPORT', label: 'Passport', value: 'Z9999999' },
+        mockRawItems,
+        800,
+        600
+      );
+      expect(box).toBeNull();
+    });
+  });
 });
 

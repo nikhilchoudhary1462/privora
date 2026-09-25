@@ -51,24 +51,38 @@ export class PdfProcessor {
       const page = await pdf.getPage(pageNum);
       const viewport = page.getViewport({ scale: 1.5 });
 
-      // Render to offscreen canvas
+      // Render to offscreen canvas with opaque white paper background
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(viewport.width);
       canvas.height = Math.round(viewport.height);
       const ctx = canvas.getContext('2d');
       if (!ctx) continue;
 
+      // Ensure crisp white background so PDF pages never render transparent or blank
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
       await page.render({
         canvasContext: ctx,
         viewport,
       }).promise;
 
-      // Extract text content with coordinates
+      // Extract text content preserving line breaks
       const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .filter((i: any) => 'str' in i)
-        .map((i: any) => i.str)
-        .join(' ');
+      const rawItems = (textContent.items as any[])
+        .filter((i: any) => i && typeof i.str === 'string' && i.str.length > 0);
+
+      let pageText = '';
+      let lastY: number | null = null;
+      for (const item of rawItems) {
+        const curY = item.transform ? item.transform[5] : null;
+        if (lastY !== null && curY !== null && Math.abs(curY - lastY) > 5) {
+          pageText += '\n' + item.str;
+        } else {
+          pageText += (pageText.length > 0 && !pageText.endsWith('\n') ? ' ' : '') + item.str;
+        }
+        if (curY !== null) lastY = curY;
+      }
 
       if (pageText) {
         textParts.push(`--- Page ${pageNum} ---\n` + pageText);
@@ -76,171 +90,24 @@ export class PdfProcessor {
 
       const pageItems: DetectedItem[] = [];
 
-      // Extract and convert all text items to viewport coordinates
-      interface TextChunk {
-        str: string;
-        x: number;
-        y: number;
-        w: number;
-        h: number;
-      }
-
-      const textChunks: TextChunk[] = [];
-      for (const item of textContent.items as any[]) {
-        if (!('str' in item) || !item.str) continue;
-        const [vx, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-        const tw = (item.width || 0) * 1.5;
-        const th = Math.max(14, (item.height || 10) * 1.5);
-        // vy is baseline in viewport coordinates; text top-left is (vx, vy - th)
-        textChunks.push({
-          str: item.str,
-          x: vx,
-          y: vy - th,
-          w: tw,
-          h: th,
-        });
-      }
-
       // Run Regex analysis over this page's text
       const regexFindings = RegexDetector.scanText(pageText);
 
-      // Map regex findings back to exact PDF viewport coordinates
+      // Map regex findings back to exact PDF viewport coordinates with tight line-isolated boxes
       regexFindings.forEach((finding, fIdx) => {
-        let matchedBox: BoundingBox | null = null;
+        const matchedBox = PdfProcessor.findBoundingBoxForFinding(finding, rawItems, canvas.width, canvas.height);
 
-        if (finding.value) {
-          const cleanVal = finding.value.replace(/[-\s]/g, '').toUpperCase();
-
-          // 1. Direct single-item match (highest precision)
-          for (const chunk of textChunks) {
-            const cleanChunk = chunk.str.replace(/[-\s]/g, '').toUpperCase();
-            if (chunk.str.includes(finding.value) || (cleanVal.length >= 4 && cleanChunk.includes(cleanVal))) {
-              matchedBox = {
-                x: Math.max(0, Math.round(chunk.x - 4)),
-                y: Math.max(0, Math.round(chunk.y - 4)),
-                width: Math.round(Math.max(50, chunk.w) + 8),
-                height: Math.round(Math.max(18, chunk.h) + 8),
-                label: finding.label,
-                isNormalized: false,
-                boxConfidence: 'EXACT',
-                boxVerified: true,
-              };
-              break;
-            }
-          }
-
-          // 2. Line-stream match if value was split across multiple chunks on the same horizontal baseline
-          if (!matchedBox) {
-            const lines: TextChunk[][] = [];
-            const sorted = [...textChunks].sort((a, b) => a.y - b.y || a.x - b.x);
-            for (const chunk of sorted) {
-              const line = lines.find(l => Math.abs(l[0].y - chunk.y) <= 4);
-              if (line) line.push(chunk);
-              else lines.push([chunk]);
-            }
-
-            for (const line of lines) {
-              const lineRaw = line.map(c => c.str).join('');
-              const lineClean = lineRaw.replace(/[-\s]/g, '').toUpperCase();
-              if (lineClean.includes(cleanVal)) {
-                // Find bounding box encompassing all items in this line that contain part of the value
-                const minX = Math.min(...line.map(c => c.x));
-                const maxX = Math.max(...line.map(c => c.x + c.w));
-                const minY = Math.min(...line.map(c => c.y));
-                const maxY = Math.max(...line.map(c => c.y + c.h));
-
-                matchedBox = {
-                  x: Math.max(0, Math.round(minX - 4)),
-                  y: Math.max(0, Math.round(minY - 4)),
-                  width: Math.round(Math.max(50, maxX - minX) + 8),
-                  height: Math.round(Math.max(18, maxY - minY) + 8),
-                  label: finding.label,
-                  isNormalized: false,
-                  boxConfidence: 'EXACT',
-                  boxVerified: true,
-                };
-                break;
-              }
-            }
-          }
+        if (matchedBox) {
+          matchedBox.boxConfidence = 'EXACT';
+          matchedBox.boxVerified = true;
+          pageItems.push({
+            ...finding,
+            id: `p${pageNum}_${finding.id || 'item'}_${fIdx}`,
+            pageNumber: pageNum,
+            boundingBox: matchedBox,
+          });
         }
-
-        // If no direct coordinate match, calculate estimated position on canvas
-        if (!matchedBox) {
-          matchedBox = {
-            x: Math.round(canvas.width * 0.1),
-            y: Math.round(canvas.height * 0.25 + (pageItems.length * 40)),
-            width: Math.round(canvas.width * 0.8),
-            height: 32,
-            label: finding.label,
-            isNormalized: false,
-            boxConfidence: 'ESTIMATED',
-            boxVerified: false,
-          };
-        }
-
-        pageItems.push({
-          ...finding,
-          id: `p${pageNum}_${finding.id || 'item'}_${fIdx}`,
-          pageNumber: pageNum,
-          boundingBox: matchedBox,
-        });
       });
-
-      // Detect face photo regions visually on this page canvas
-      try {
-        const thumbScale = Math.min(1, 320 / Math.max(canvas.width, canvas.height));
-        const tw = Math.round(canvas.width * thumbScale);
-        const th = Math.round(canvas.height * thumbScale);
-        const tCan = document.createElement('canvas');
-        tCan.width = tw;
-        tCan.height = th;
-        const tCtx = tCan.getContext('2d');
-        if (tCtx) {
-          tCtx.drawImage(canvas, 0, 0, tw, th);
-          const imgData = tCtx.getImageData(0, 0, tw, th);
-          let skinPixels = 0;
-          let minSx = tw, maxSx = 0, minSy = th, maxSy = 0;
-          const data = imgData.data;
-          for (let y = 0; y < th; y++) {
-            for (let x = 0; x < tw; x++) {
-              const idx = (y * tw + x) * 4;
-              const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-              if (r > 65 && g > 45 && b > 25 && r > g && r > b && (r - g) >= 10 && (r - b) >= 15) {
-                skinPixels++;
-                if (x < minSx) minSx = x;
-                if (x > maxSx) maxSx = x;
-                if (y < minSy) minSy = y;
-                if (y > maxSy) maxSy = y;
-              }
-            }
-          }
-          if (skinPixels > 140 && (maxSx - minSx) >= 18 && (maxSy - minSy) >= 22) {
-            const fx = Math.round(minSx / thumbScale);
-            const fy = Math.round(minSy / thumbScale);
-            const fw = Math.round((maxSx - minSx) / thumbScale);
-            const fh = Math.round((maxSy - minSy) / thumbScale);
-            pageItems.push({
-              id: `p${pageNum}_face_${pageItems.length}`,
-              type: 'FACE',
-              label: 'Biometric Face Photo',
-              value: 'FACE_BIOMETRIC',
-              confidence: 0.94,
-              complianceTags: ['DPDP_INDIA', 'GDPR'],
-              recommendation: 'Biometric facial photograph requiring privacy shielding.',
-              pageNumber: pageNum,
-              boundingBox: {
-                x: fx,
-                y: fy,
-                width: fw,
-                height: fh,
-                label: 'Face Photo',
-                isNormalized: false,
-              }
-            });
-          }
-        }
-      } catch (e) {}
 
       const pageDataUrl = canvas.toDataURL('image/png');
       pages.push({
@@ -321,5 +188,138 @@ export class PdfProcessor {
     });
 
     return pdf.output('blob');
+  }
+
+  /**
+   * Spatially resolves the tightest bounding box for a detected PII finding on a PDF page.
+   * Guarantees that single-line text items NEVER expand across multiple rows or columns.
+   */
+  public static findBoundingBoxForFinding(
+    finding: { type?: string; label?: string; value?: string },
+    rawItems: any[],
+    canvasWidth: number,
+    canvasHeight: number
+  ): BoundingBox | null {
+    if (!finding || !finding.value || !rawItems || rawItems.length === 0) return null;
+
+    const rawTarget = finding.value.trim();
+    const cleanTarget = rawTarget.replace(/[-\s]/g, '').toLowerCase();
+    if (cleanTarget.length < 2) return null;
+
+    // PASS 1: Direct Single-Item Exact or Substring Match (Tightest & Most Accurate)
+    for (const item of rawItems) {
+      const itemStr = (item.str || '').trim();
+      if (!itemStr) continue;
+      const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
+
+      const exactSub = itemStr.includes(rawTarget);
+      const cleanSub = (cleanItem.length >= 4 && cleanItem === cleanTarget) ||
+                       (cleanTarget.length >= 4 && cleanItem.includes(cleanTarget));
+
+      if (exactSub || cleanSub) {
+        const tx = item.transform[4] * 1.5;
+        const ty = canvasHeight - (item.transform[5] * 1.5);
+        const tw = Math.max(16, (item.width || 40) * 1.5);
+        const th = Math.max(12, (item.height || Math.abs(item.transform[0]) || 14) * 1.5);
+
+        let bx = Math.max(0, Math.round(tx - 3));
+        let bw = Math.round(tw + 6);
+
+        // If the item contains extra words, compute proportional sub-box
+        if (itemStr.length > rawTarget.length + 3 && itemStr.includes(rawTarget)) {
+          const charIdx = itemStr.indexOf(rawTarget);
+          if (charIdx !== -1) {
+            const charRatio = tw / itemStr.length;
+            bx = Math.max(0, Math.round(tx + (charIdx * charRatio) - 3));
+            bw = Math.min(canvasWidth - bx, Math.round((rawTarget.length * charRatio) + 6));
+          }
+        }
+
+        const by = Math.max(0, Math.round(ty - th - 2));
+        const bh = Math.min(32, Math.round(th + 4));
+
+        return {
+          x: bx,
+          y: by,
+          width: Math.min(canvasWidth - bx, bw),
+          height: bh,
+          label: finding.label,
+          isNormalized: false,
+        };
+      }
+    }
+
+    // PASS 2: Contiguous consecutive items on the EXACT SAME LINE (e.g. split Aadhaar "1234 " + "5678 " + "9012")
+    for (let i = 0; i < rawItems.length; i++) {
+      const baseItem = rawItems[i];
+      const baseTy = baseItem.transform ? baseItem.transform[5] : 0;
+      let accumulated = '';
+      const slice: any[] = [];
+
+      for (let j = i; j < Math.min(rawItems.length, i + 6); j++) {
+        const curItem = rawItems[j];
+        const curTy = curItem.transform ? curItem.transform[5] : 0;
+
+        // CRITICAL: Items MUST be on the exact same line (within 5 points vertically)
+        if (Math.abs(curTy - baseTy) > 5) {
+          break; // Stop immediately - do NOT cross rows or columns!
+        }
+
+        const curClean = (curItem.str || '').replace(/[-\s]/g, '').toLowerCase();
+        if (!curClean) continue;
+
+        accumulated += curClean;
+        slice.push(curItem);
+
+        if (accumulated.includes(cleanTarget)) {
+          const matchStart = accumulated.indexOf(cleanTarget);
+          const matchEnd = matchStart + cleanTarget.length;
+
+          // Filter slice to ONLY items that overlap [matchStart, matchEnd)
+          let curCharPos = 0;
+          const contributingItems: any[] = [];
+          for (const it of slice) {
+            const itLen = (it.str || '').replace(/[-\s]/g, '').toLowerCase().length;
+            const itStart = curCharPos;
+            const itEnd = curCharPos + itLen;
+            if (itEnd > matchStart && itStart < matchEnd) {
+              contributingItems.push(it);
+            }
+            curCharPos = itEnd;
+          }
+
+          if (contributingItems.length > 0) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            contributingItems.forEach(it => {
+              const tx = it.transform[4] * 1.5;
+              const ty = canvasHeight - (it.transform[5] * 1.5);
+              const tw = Math.max(14, (it.width || 30) * 1.5);
+              const th = Math.max(12, (it.height || Math.abs(it.transform[0]) || 14) * 1.5);
+
+              minX = Math.min(minX, tx - 3);
+              minY = Math.min(minY, ty - th - 2);
+              maxX = Math.max(maxX, tx + tw + 3);
+              maxY = Math.max(maxY, ty + 2);
+            });
+
+            const bx = Math.max(0, Math.round(minX));
+            const by = Math.max(0, Math.round(minY));
+            const bw = Math.min(canvasWidth - bx, Math.round(maxX - minX));
+            const bh = Math.min(32, Math.round(maxY - minY));
+
+            return {
+              x: bx,
+              y: by,
+              width: bw,
+              height: bh,
+              label: finding.label,
+              isNormalized: false,
+            };
+          }
+        }
+      }
+    }
+
+    return null;
   }
 }

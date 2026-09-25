@@ -425,7 +425,7 @@ export class RegexDetector {
     }
 
     // 15. Residential Address & PIN Code
-    const addressRegex = /(?:(?:Address|Residential Address|Residing at|पता)\s*[:\-\/\s]\s*)([^\n\r]{8,90})(?=[;\n\r]|$)/gi;
+    const addressRegex = /(?:(?:Address|Residential Address|Residing at|पता)\s*[:\-\/\s]\s*)([A-Za-z0-9\s,\-\/\.]{6,60})(?=[;\n\r]|(?:PIN|Phone|Email|City|State|DOB|Name|Account|Total|Synthetic)|$)/gi;
     while ((match = addressRegex.exec(text)) !== null) {
       const addrVal = match[1]?.trim();
       if (addrVal && addrVal.length >= 8) {

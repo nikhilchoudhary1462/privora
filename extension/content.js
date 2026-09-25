@@ -273,7 +273,7 @@
     }
 
     // 13. Residential Address & PIN Code
-    const addressRegex = /(?:(?:Address|Residential Address|Residing at|पता)\s*[:\-\/\s]\s*)([^\n\r]{8,90})(?=[;\n\r]|$)/gi;
+    const addressRegex = /(?:(?:Address|Residential Address|Residing at|पता)\s*[:\-\/\s]\s*)([A-Za-z0-9\s,\-\/\.]{6,60})(?=[;\n\r]|(?:PIN|Phone|Email|City|State|DOB|Name|Account|Total|Synthetic)|$)/gi;
     while ((match = addressRegex.exec(text)) !== null) {
       const addrVal = match[1]?.trim();
       if (addrVal && addrVal.length >= 8) {
@@ -671,6 +671,128 @@
   // Automatic Sensitive Region & Face Detection Engine
   // -------------------------------------------------------------
   window._privoraRecentManifests = window._privoraRecentManifests || [];
+
+  function findBoundingBoxForFinding(finding, rawItems, canvasWidth, canvasHeight) {
+    if (!finding || !finding.value || !rawItems || rawItems.length === 0) return null;
+
+    const rawTarget = finding.value.trim();
+    const cleanTarget = rawTarget.replace(/[-\s]/g, '').toLowerCase();
+    if (cleanTarget.length < 2) return null;
+
+    // PASS 1: Direct Single-Item Exact or Substring Match (Tightest & Most Accurate)
+    for (const item of rawItems) {
+      const itemStr = (item.str || '').trim();
+      if (!itemStr) continue;
+      const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
+
+      const exactSub = itemStr.includes(rawTarget);
+      const cleanSub = (cleanItem.length >= 4 && cleanItem === cleanTarget) ||
+                       (cleanTarget.length >= 4 && cleanItem.includes(cleanTarget));
+
+      if (exactSub || cleanSub) {
+        const tx = item.transform[4] * 1.5;
+        const ty = canvasHeight - (item.transform[5] * 1.5);
+        const tw = Math.max(16, (item.width || 40) * 1.5);
+        const th = Math.max(12, (item.height || Math.abs(item.transform[0]) || 14) * 1.5);
+
+        let bx = Math.max(0, Math.round(tx - 3));
+        let bw = Math.round(tw + 6);
+
+        // If the item contains extra words, compute proportional sub-box
+        if (itemStr.length > rawTarget.length + 3 && itemStr.includes(rawTarget)) {
+          const charIdx = itemStr.indexOf(rawTarget);
+          if (charIdx !== -1) {
+            const charRatio = tw / itemStr.length;
+            bx = Math.max(0, Math.round(tx + (charIdx * charRatio) - 3));
+            bw = Math.min(canvasWidth - bx, Math.round((rawTarget.length * charRatio) + 6));
+          }
+        }
+
+        const by = Math.max(0, Math.round(ty - th - 2));
+        const bh = Math.min(32, Math.round(th + 4));
+
+        return {
+          x: bx,
+          y: by,
+          width: Math.min(canvasWidth - bx, bw),
+          height: bh,
+          label: finding.label || finding.type
+        };
+      }
+    }
+
+    // PASS 2: Contiguous consecutive items on the EXACT SAME LINE (e.g. split Aadhaar "1234 " + "5678 " + "9012")
+    for (let i = 0; i < rawItems.length; i++) {
+      const baseItem = rawItems[i];
+      const baseTy = baseItem.transform ? baseItem.transform[5] : 0;
+      let accumulated = '';
+      const slice = [];
+
+      for (let j = i; j < Math.min(rawItems.length, i + 6); j++) {
+        const curItem = rawItems[j];
+        const curTy = curItem.transform ? curItem.transform[5] : 0;
+
+        // CRITICAL: Items MUST be on the exact same line (within 5 points vertically)
+        if (Math.abs(curTy - baseTy) > 5) {
+          break; // Stop immediately - do NOT cross rows or columns!
+        }
+
+        const curClean = (curItem.str || '').replace(/[-\s]/g, '').toLowerCase();
+        if (!curClean) continue;
+
+        accumulated += curClean;
+        slice.push(curItem);
+
+        if (accumulated.includes(cleanTarget)) {
+          const matchStart = accumulated.indexOf(cleanTarget);
+          const matchEnd = matchStart + cleanTarget.length;
+
+          // Filter slice to ONLY items that overlap [matchStart, matchEnd)
+          let curCharPos = 0;
+          const contributingItems = [];
+          for (const it of slice) {
+            const itLen = (it.str || '').replace(/[-\s]/g, '').toLowerCase().length;
+            const itStart = curCharPos;
+            const itEnd = curCharPos + itLen;
+            if (itEnd > matchStart && itStart < matchEnd) {
+              contributingItems.push(it);
+            }
+            curCharPos = itEnd;
+          }
+
+          if (contributingItems.length > 0) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            contributingItems.forEach(it => {
+              const tx = it.transform[4] * 1.5;
+              const ty = canvasHeight - (it.transform[5] * 1.5);
+              const tw = Math.max(14, (it.width || 30) * 1.5);
+              const th = Math.max(12, (it.height || Math.abs(it.transform[0]) || 14) * 1.5);
+
+              minX = Math.min(minX, tx - 3);
+              minY = Math.min(minY, ty - th - 2);
+              maxX = Math.max(maxX, tx + tw + 3);
+              maxY = Math.max(maxY, ty + 2);
+            });
+
+            const bx = Math.max(0, Math.round(minX));
+            const by = Math.max(0, Math.round(minY));
+            const bw = Math.min(canvasWidth - bx, Math.round(maxX - minX));
+            const bh = Math.min(32, Math.round(maxY - minY));
+
+            return {
+              x: bx,
+              y: by,
+              width: bw,
+              height: bh,
+              label: finding.label || finding.type
+            };
+          }
+        }
+      }
+    }
+
+    return null;
+  }
 
   function detectFaceOrSensitiveRegions(canvas, fileName) {
     const w = canvas.width;
@@ -1117,79 +1239,40 @@
             pCanvas.height = Math.round(viewport.height);
             const pCtx = pCanvas.getContext('2d', { willReadFrequently: true });
 
+            // Ensure crisp opaque white paper background
+            pCtx.fillStyle = '#FFFFFF';
+            pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
+
             await page.render({
               canvasContext: pCtx,
               viewport: viewport,
             }).promise;
 
             const textContent = await page.getTextContent();
-            const rawItems = (textContent.items || []).filter(i => i && typeof i.str === 'string');
-            const pageText = rawItems.map(i => i.str).join(' ');
+            const rawItems = (textContent.items || []).filter(i => i && typeof i.str === 'string' && i.str.length > 0);
+            
+            let pageText = '';
+            let lastY = null;
+            for (const item of rawItems) {
+              const curY = item.transform ? item.transform[5] : null;
+              if (lastY !== null && curY !== null && Math.abs(curY - lastY) > 5) {
+                pageText += '\n' + item.str;
+              } else {
+                pageText += (pageText.length > 0 && !pageText.endsWith('\n') ? ' ' : '') + item.str;
+              }
+              if (curY !== null) lastY = curY;
+            }
 
             const piiItems = scanText(pageText);
             const pageBoxes = [];
 
-            // Multi-chunk union bounding box mapping
+            // Line-constrained tight bounding box mapping
             piiItems.forEach(finding => {
-              if (!finding.value) return;
-              const findingVal = finding.value.trim();
-              const cleanFinding = findingVal.replace(/[-\s]/g, '').toLowerCase();
-
-              const matchedChunks = [];
-              for (const item of rawItems) {
-                const itemStr = item.str;
-                const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
-                if (!cleanItem) continue;
-
-                const isExact = itemStr.includes(findingVal) || findingVal.includes(itemStr);
-                const isClean = (cleanItem.length >= 3 && cleanFinding.includes(cleanItem)) ||
-                                (cleanFinding.length >= 3 && cleanItem.includes(cleanFinding));
-
-                if (isExact || isClean) {
-                  matchedChunks.push(item);
-                }
-              }
-
-              if (matchedChunks.length > 0) {
-                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                matchedChunks.forEach(item => {
-                  const tx = item.transform[4] * 1.5;
-                  const ty = viewport.height - (item.transform[5] * 1.5);
-                  const tw = Math.max(16, (item.width || 40) * 1.5);
-                  const th = Math.max(14, (item.height || Math.abs(item.transform[0]) || 14) * 1.5);
-
-                  const bx = Math.max(0, Math.round(tx - 4));
-                  const by = Math.max(0, Math.round(ty - th - 3));
-                  const bw = Math.round(tw + 8);
-                  const bh = Math.round(th + 6);
-
-                  minX = Math.min(minX, bx);
-                  minY = Math.min(minY, by);
-                  maxX = Math.max(maxX, bx + bw);
-                  maxY = Math.max(maxY, by + bh);
-                });
-
-                if (minX < Infinity && maxX > minX && maxY > minY) {
-                  pageBoxes.push({
-                    x: minX,
-                    y: minY,
-                    width: Math.min(pCanvas.width - minX, maxX - minX),
-                    height: Math.min(pCanvas.height - minY, maxY - minY),
-                    label: finding.label
-                  });
-                }
+              const matchedBox = findBoundingBoxForFinding(finding, rawItems, pCanvas.width, pCanvas.height);
+              if (matchedBox) {
+                pageBoxes.push(matchedBox);
               }
             });
-
-            // Also detect face photos or visual ID photo blocks on canvas
-            try {
-              const faceBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name);
-              faceBoxes.forEach(fb => {
-                if (!pageBoxes.some(pb => Math.abs(pb.x - fb.x) < 30 && Math.abs(pb.y - fb.y) < 30)) {
-                  pageBoxes.push(fb);
-                }
-              });
-            } catch (e) {}
 
             // Draw privacy masks on canvas copy
             const maskedCanvas = document.createElement('canvas');
@@ -1629,8 +1712,8 @@
     const canvasContainer = document.createElement('div');
     canvasContainer.style.cssText = `
       position: relative;
-      background: #020617;
-      border: 1px solid #1e293b;
+      background: #FFFFFF;
+      border: 1px solid rgba(0, 0, 0, 0.12);
       border-radius: 14px;
       overflow: hidden;
       display: flex;
@@ -1639,6 +1722,7 @@
       min-height: 280px;
       max-height: 400px;
       user-select: none;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.03);
     `;
 
     const canvas = document.createElement('canvas');
@@ -1856,79 +1940,40 @@
             pCanvas.height = Math.round(viewport.height);
             const pCtx = pCanvas.getContext('2d');
 
+            // Ensure crisp opaque white paper background
+            pCtx.fillStyle = '#FFFFFF';
+            pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
+
             await page.render({
               canvasContext: pCtx,
               viewport: viewport,
             }).promise;
 
             const textContent = await page.getTextContent();
-            const rawItems = (textContent.items || []).filter(i => i && typeof i.str === 'string');
-            const pageText = rawItems.map(i => i.str).join(' ');
+            const rawItems = (textContent.items || []).filter(i => i && typeof i.str === 'string' && i.str.length > 0);
+
+            let pageText = '';
+            let lastY = null;
+            for (const item of rawItems) {
+              const curY = item.transform ? item.transform[5] : null;
+              if (lastY !== null && curY !== null && Math.abs(curY - lastY) > 5) {
+                pageText += '\n' + item.str;
+              } else {
+                pageText += (pageText.length > 0 && !pageText.endsWith('\n') ? ' ' : '') + item.str;
+              }
+              if (curY !== null) lastY = curY;
+            }
 
             const piiItems = scanText(pageText);
             const pageBoxes = [];
 
-            // Multi-chunk union bounding box mapping
+            // Line-constrained tight bounding box mapping
             piiItems.forEach(finding => {
-              if (!finding.value) return;
-              const findingVal = finding.value.trim();
-              const cleanFinding = findingVal.replace(/[-\s]/g, '').toLowerCase();
-
-              const matchedChunks = [];
-              for (const item of rawItems) {
-                const itemStr = item.str;
-                const cleanItem = itemStr.replace(/[-\s]/g, '').toLowerCase();
-                if (!cleanItem) continue;
-
-                const isExact = itemStr.includes(findingVal) || findingVal.includes(itemStr);
-                const isClean = (cleanItem.length >= 3 && cleanFinding.includes(cleanItem)) ||
-                                (cleanFinding.length >= 3 && cleanItem.includes(cleanFinding));
-
-                if (isExact || isClean) {
-                  matchedChunks.push(item);
-                }
-              }
-
-              if (matchedChunks.length > 0) {
-                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                matchedChunks.forEach(item => {
-                  const tx = item.transform[4] * 1.5;
-                  const ty = viewport.height - (item.transform[5] * 1.5);
-                  const tw = Math.max(16, (item.width || 40) * 1.5);
-                  const th = Math.max(14, (item.height || Math.abs(item.transform[0]) || 14) * 1.5);
-
-                  const bx = Math.max(0, Math.round(tx - 4));
-                  const by = Math.max(0, Math.round(ty - th - 3));
-                  const bw = Math.round(tw + 8);
-                  const bh = Math.round(th + 6);
-
-                  minX = Math.min(minX, bx);
-                  minY = Math.min(minY, by);
-                  maxX = Math.max(maxX, bx + bw);
-                  maxY = Math.max(maxY, by + bh);
-                });
-
-                if (minX < Infinity && maxX > minX && maxY > minY) {
-                  pageBoxes.push({
-                    x: minX,
-                    y: minY,
-                    width: Math.min(pCanvas.width - minX, maxX - minX),
-                    height: Math.min(pCanvas.height - minY, maxY - minY),
-                    label: finding.label
-                  });
-                }
+              const matchedBox = findBoundingBoxForFinding(finding, rawItems, pCanvas.width, pCanvas.height);
+              if (matchedBox) {
+                pageBoxes.push(matchedBox);
               }
             });
-
-            // Also detect face photos or visual ID photo blocks on canvas
-            try {
-              const faceBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name);
-              faceBoxes.forEach(fb => {
-                if (!pageBoxes.some(pb => Math.abs(pb.x - fb.x) < 30 && Math.abs(pb.y - fb.y) < 30)) {
-                  pageBoxes.push(fb);
-                }
-              });
-            } catch (e) {}
 
             pdfPages.push({
               pageNum: pNum,
@@ -2061,6 +2106,10 @@
     function renderCanvas(isExport = false) {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
+
+      // Always paint crisp white background so transparent pages never render dark or blank
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       if (baseImage && baseImage.complete && baseImage.naturalWidth > 0) {
         ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);

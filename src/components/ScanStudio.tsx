@@ -145,7 +145,9 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
     img.onload = () => {
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Always fill with clean white paper background so transparent documents never display blank
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
 
       if (!detection) return;
@@ -738,7 +740,10 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
       const synMaps = SyntheticEngine.generateAllMappings(detectResult.detectedItems, detectResult.fileHash);
       setSyntheticMappings(synMaps);
 
-      if (detectResult.previewDataUrl) {
+      if (detectResult.pages && detectResult.pages.length > 0) {
+        setCurrentPageIndex(0);
+        setPreviewImageUrl(detectResult.pages[0].pageImageDataUrl);
+      } else if (detectResult.previewDataUrl) {
         setPreviewImageUrl(detectResult.previewDataUrl);
       } else if (file.type.startsWith('image/')) {
         const objectUrl = URL.createObjectURL(file);
@@ -2534,7 +2539,7 @@ console.log("Starting secure daemon...");`;
                 )}
 
                 <div 
-                  className="relative rounded-2xl overflow-hidden bg-[#212529] border border-black/5 flex items-center justify-center max-w-full select-none shadow-minimal"
+                  className="relative rounded-2xl overflow-hidden bg-white border border-black/10 flex items-center justify-center max-w-full select-none shadow-minimal"
                   style={{ cursor: canvasCursor }}
                 >
                   <canvas 
@@ -2542,7 +2547,7 @@ console.log("Starting secure daemon...");`;
                     onMouseDown={handleCanvasMouseDown}
                     onMouseMove={handleCanvasMouseMove}
                     onMouseUp={handleCanvasMouseUp}
-                    className="max-w-full max-h-[520px] object-contain rounded-xl"
+                    className="max-w-full max-h-[520px] object-contain rounded-xl bg-white shadow-sm"
                   />
                 </div>
                 <p className="text-[11px] text-[#757575] font-mono text-center">
