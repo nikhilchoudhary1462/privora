@@ -22,7 +22,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["lib/pdf.min.js", "lib/pdf.worker.min.js", "content.js"],
+      "js": ["lib/pdf.worker.min.js", "lib/pdf.min.js", "content.js"],
       "run_at": "document_start"
     }
   ],

@@ -1384,11 +1384,26 @@
               }
             });
 
-            // Extract unblurred slice before masking
+            // Also check for faces or visual sensitive cards on this page canvas
+            const visualBoxes = detectFaceOrSensitiveRegions(pCanvas, file.name);
+            visualBoxes.forEach(vBox => {
+              const isOverlapping = pageBoxes.some(pBox => 
+                Math.abs(pBox.x - vBox.x) < 40 && Math.abs(pBox.y - vBox.y) < 40
+              );
+              if (!isOverlapping) {
+                pageBoxes.push(vBox);
+              }
+            });
+
+            // 1. Extract unblurred slices for retrace/decryption BEFORE drawing privacy masks
             pageBoxes.forEach(box => {
+              const maxDim = 380;
+              const sScale = Math.min(1, maxDim / Math.max(box.width, box.height, 1));
+              const sW = Math.max(1, Math.round(box.width * sScale));
+              const sH = Math.max(1, Math.round(box.height * sScale));
               const cropCanvas = document.createElement('canvas');
-              cropCanvas.width = Math.max(1, Math.round(box.width));
-              cropCanvas.height = Math.max(1, Math.round(box.height));
+              cropCanvas.width = sW;
+              cropCanvas.height = sH;
               const cCtx = cropCanvas.getContext('2d');
               if (cCtx) {
                 cCtx.drawImage(
@@ -1399,8 +1414,8 @@
                   Math.round(box.height),
                   0,
                   0,
-                  cropCanvas.width,
-                  cropCanvas.height
+                  sW,
+                  sH
                 );
                 pdfSlices.push({
                   pageNum: pNum,
@@ -1408,13 +1423,13 @@
                   normY: box.y / pCanvas.height,
                   normW: box.width / pCanvas.width,
                   normH: box.height / pCanvas.height,
-                  cropDataUrl: cropCanvas.toDataURL('image/png'),
-                  label: box.label || 'Protected Piece',
+                  cropDataUrl: cropCanvas.toDataURL('image/jpeg', 0.88),
+                  label: box.label || 'Protected PDF Region',
                 });
               }
             });
 
-            // Draw privacy masks on canvas copy
+            // 2. Draw privacy masks on canvas copy
             const maskedCanvas = document.createElement('canvas');
             maskedCanvas.width = pCanvas.width;
             maskedCanvas.height = pCanvas.height;
@@ -1477,6 +1492,8 @@
             origHash,
             timestamp: Date.now(),
             slices: pdfSlices,
+            isPdf: true,
+            totalPages,
             origin: window.location.origin,
             hostname: window.location.hostname,
           };
@@ -2763,10 +2780,9 @@
     // Button Click Handlers
     btnConfirmMask.onclick = async () => {
       // 1. Extract raw unblurred slices for auto-restoration
-      const unblurredSlices = [];
       if (isPdf && pdfPages && pdfPages.length > 0) {
         pdfPages[currentPdfPageIdx].boxes = [...currentBoxes];
-        for (const p of pdfPages) {
+        pdfPages.forEach((p, pIdx) => {
           (p.boxes || []).forEach((box) => {
             const cropCanvas = document.createElement('canvas');
             cropCanvas.width = Math.max(1, Math.round(box.width));
@@ -2785,17 +2801,17 @@
                 cropCanvas.height
               );
               unblurredSlices.push({
-                pageNum: p.pageNum,
+                pageNum: p.pageNum || (pIdx + 1),
                 normX: box.x / p.canvas.width,
                 normY: box.y / p.canvas.height,
                 normW: box.width / p.canvas.width,
                 normH: box.height / p.canvas.height,
-                cropDataUrl: cropCanvas.toDataURL('image/png'),
+                cropDataUrl: cropCanvas.toDataURL('image/jpeg', 0.88),
                 label: box.label || 'Protected Piece',
               });
             }
           });
-        }
+        });
       } else if (baseImage && baseImage.complete && baseImage.naturalWidth > 0) {
         currentBoxes.forEach((box) => {
           const cropCanvas = document.createElement('canvas');
@@ -2891,6 +2907,8 @@
             origHash,
             timestamp: Date.now(),
             slices: unblurredSlices,
+            isPdf: true,
+            totalPages: pdfPages.length || 1,
             origin: window.location.origin,
             hostname: window.location.hostname,
           };
@@ -3015,14 +3033,14 @@
       let isCommitted = false;
 
       const commitFile = (fileToCommit, isPlaintext = false) => {
-        if (isCommitted) return;
-        isCommitted = true;
         if (isPlaintext) {
           target.dataset.aegisSanitized = 'true';
-          target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-        } else {
           replaceInputFiles(target, fileToCommit);
+          return;
         }
+        if (isCommitted) return;
+        isCommitted = true;
+        replaceInputFiles(target, fileToCommit);
       };
 
       const cancelCommit = () => {
@@ -3060,12 +3078,17 @@
           }
         });
 
+        // Immediately commit sanitized file so input.files[0] has masked content
+        if (sanitizedFile) {
+          commitFile(sanitizedFile);
+        }
+
         // If the host form is submitted before user interacts with the preview card,
         // commit the auto-encrypted file seamlessly once.
         const hostForm = target.form || (target.closest && target.closest('form'));
         if (hostForm) {
           hostForm.addEventListener('submit', () => {
-            if (!isCommitted) {
+            if (!isCommitted && sanitizedFile) {
               commitFile(sanitizedFile);
             }
           }, { once: true, capture: true });
@@ -3148,6 +3171,11 @@
             });
           }
         });
+
+        // Immediately commit sanitized file for drop event
+        if (sanitizedFile) {
+          commitDrop(sanitizedFile);
+        }
       } catch (err) {
         console.warn('[Privora Shield] Auto-protect drop failed:', err);
       }
@@ -3227,6 +3255,91 @@
     return matched || null;
   }
 
+  async function retraceAndRestorePdf(pdfBlob, matched) {
+    const pdfjs = window.pdfjsLib || globalThis.pdfjsLib;
+    if (!pdfjs) {
+      console.warn('[Privora Shield] pdfjsLib not available for PDF restoration');
+      return null;
+    }
+
+    try {
+      if (pdfjs.GlobalWorkerOptions) {
+        pdfjs.GlobalWorkerOptions.workerSrc = '';
+      }
+    } catch (e) {}
+
+    try {
+      const arrayBuffer = await pdfBlob.arrayBuffer();
+      const loadingTask = pdfjs.getDocument({
+        data: new Uint8Array(arrayBuffer),
+        useSystemFonts: true,
+      });
+      const pdfDoc = await loadingTask.promise;
+      const totalPages = Math.max(1, pdfDoc.numPages);
+      const restoredCanvases = [];
+
+      // Group unblurred slices by pageNum (1-indexed)
+      const slicesByPage = {};
+      (matched.slices || []).forEach(slice => {
+        const p = slice.pageNum || 1;
+        if (!slicesByPage[p]) slicesByPage[p] = [];
+        slicesByPage[p].push(slice);
+      });
+
+      for (let pNum = 1; pNum <= totalPages; pNum++) {
+        const page = await pdfDoc.getPage(pNum);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const pCanvas = document.createElement('canvas');
+        pCanvas.width = Math.round(viewport.width);
+        pCanvas.height = Math.round(viewport.height);
+        const pCtx = pCanvas.getContext('2d', { willReadFrequently: true });
+
+        // Crisp white paper background
+        pCtx.fillStyle = '#FFFFFF';
+        pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
+
+        await page.render({
+          canvasContext: pCtx,
+          viewport: viewport,
+        }).promise;
+
+        // Patch unblurred slices for this page
+        const pageSlices = slicesByPage[pNum] || [];
+        for (const slice of pageSlices) {
+          if (!slice.cropDataUrl) continue;
+          const sliceImg = new Image();
+          await new Promise((res) => {
+            sliceImg.onload = res;
+            sliceImg.onerror = res;
+            sliceImg.src = slice.cropDataUrl;
+          });
+
+          const sx = Math.round(slice.normX * pCanvas.width);
+          const sy = Math.round(slice.normY * pCanvas.height);
+          const sw = Math.round(slice.normW * pCanvas.width);
+          const sh = Math.round(slice.normH * pCanvas.height);
+          pCtx.drawImage(sliceImg, sx, sy, sw, sh);
+        }
+
+        restoredCanvases.push(pCanvas);
+      }
+
+      const restoredPdfBlob = createPdfBlobFromCanvases(restoredCanvases);
+      if (!restoredPdfBlob) return null;
+
+      return {
+        blob: restoredPdfBlob,
+        inputSize: pdfBlob.size,
+        restoredSize: restoredPdfBlob.size,
+        originalSize: matched.originalFileSize || null,
+        manifest: matched,
+      };
+    } catch (err) {
+      console.warn('[Privora Shield] Failed to retrace and restore PDF:', err);
+      return null;
+    }
+  }
+
   async function retraceAndRestoreImage(imageBlob, fileName) {
     const memoryManifests = window._privoraRecentManifests || [];
 
@@ -3263,6 +3376,7 @@
 
         let isPdfTarget = (fileName && fileName.toLowerCase().endsWith('.pdf')) ||
           (imageBlob && imageBlob.type === 'application/pdf') ||
+          (matched && matched.isPdf) ||
           (matched.fileName && matched.fileName.toLowerCase().endsWith('.pdf'));
 
         if (!isPdfTarget && imageBlob) {
