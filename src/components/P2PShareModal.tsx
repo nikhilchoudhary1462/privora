@@ -245,37 +245,55 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
   // -------------------------------------------------------------
   const startCameraScanner = async (onScanSuccess: (decoded: string) => void) => {
     try {
-      setIsScanningCamera(true);
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      stopCamera();
+      setStatusMessage('Requesting camera access...');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+      });
       cameraStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
+      setIsScanningCamera(true);
+
+      const initVideo = () => {
+        if (!cameraStreamRef.current) return;
+        const video = videoRef.current;
+        if (!video) {
+          requestAnimationFrame(initVideo);
+          return;
+        }
+
+        video.srcObject = stream;
+        video.setAttribute('playsinline', 'true');
+        video.play().catch(e => console.warn('Video play deferred:', e));
 
         const scanCanvas = document.createElement('canvas');
         const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
 
         const scanFrame = () => {
-          if (!videoRef.current || !cameraStreamRef.current) return;
-          if (videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA && scanCtx) {
-            scanCanvas.width = videoRef.current.videoWidth;
-            scanCanvas.height = videoRef.current.videoHeight;
-            scanCtx.drawImage(videoRef.current, 0, 0);
+          if (!cameraStreamRef.current) return;
+          if (video.readyState >= 2 && scanCtx && video.videoWidth > 0) {
+            scanCanvas.width = video.videoWidth;
+            scanCanvas.height = video.videoHeight;
+            scanCtx.drawImage(video, 0, 0);
             const imgData = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
             const code = jsQR(imgData.data, imgData.width, imgData.height);
             if (code && code.data) {
-              onScanSuccess(code.data);
               stopCamera();
+              onScanSuccess(code.data);
               return;
             }
           }
-          requestAnimationFrame(scanFrame);
+          if (cameraStreamRef.current) {
+            requestAnimationFrame(scanFrame);
+          }
         };
+
         requestAnimationFrame(scanFrame);
-      }
-    } catch (err) {
+      };
+
+      requestAnimationFrame(initVideo);
+    } catch (err: any) {
       console.warn('Camera access unavailable:', err);
-      setStatusMessage('Camera unavailable. You can copy & paste the QR payload string directly.');
+      setStatusMessage(`Camera access denied or unavailable: ${err?.message || 'permission error'}. You can paste the token manually.`);
       setIsScanningCamera(false);
     }
   };
@@ -803,58 +821,166 @@ export const P2PShareModal: React.FC<P2PShareModalProps> = ({
                     />
                   </div>
 
-                  <div className="w-full max-w-lg space-y-2 pt-3 border-t border-slate-200">
-                    <label className="text-[11px] font-bold text-slate-700 block text-left">
-                      Step 2: Paste Receiver's Answer Token below to finalize:
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Paste Receiver's Answer Token here..."
-                      value={receiverAnswerInput}
-                      onChange={(e) => setReceiverAnswerInput(e.target.value)}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-indigo-500 font-mono"
-                    />
-                    <button
-                      onClick={() => handleFinalizeSenderTransfer()}
-                      disabled={!receiverAnswerInput.trim() || isFinalizing}
-                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
-                    >
-                      {isFinalizing ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Connecting & Streaming Encrypted File...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Zap className="w-4 h-4" />
-                          <span>Finalize Connection & Stream Encrypted File</span>
-                        </>
+                  <div className="w-full max-w-lg space-y-3 pt-3 border-t border-slate-200">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-700 block text-left">
+                        Step 2: Scan or Paste Receiver's Answer Token:
+                      </label>
+                      {!isScanningCamera && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            startCameraScanner((decoded) => {
+                              setReceiverAnswerInput(decoded);
+                              handleFinalizeSenderTransfer(decoded);
+                            });
+                          }}
+                          className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>Scan Answer QR</span>
+                        </button>
                       )}
-                    </button>
+                    </div>
+
+                    {isScanningCamera ? (
+                      <div className="relative w-full max-w-xs mx-auto aspect-square rounded-2xl overflow-hidden bg-black border-2 border-indigo-500 shadow-lg flex items-center justify-center">
+                        <video
+                          ref={videoRef}
+                          playsInline
+                          muted
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
+                          <div className="w-44 h-44 border-2 border-dashed border-white/90 rounded-2xl animate-pulse" />
+                          <p className="text-[10px] font-mono text-white/90 bg-black/60 px-3 py-1 rounded-full mt-3 backdrop-blur-sm">
+                            Align phone's Answer QR
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={stopCamera}
+                          className="absolute bottom-3 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-rose-600/90 hover:bg-rose-700 text-white rounded-full text-xs font-bold shadow-md cursor-pointer transition-all"
+                        >
+                          Cancel Camera
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="Paste Receiver's Answer Token here..."
+                          value={receiverAnswerInput}
+                          onChange={(e) => setReceiverAnswerInput(e.target.value)}
+                          className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-indigo-500 font-mono"
+                        />
+                        <button
+                          onClick={() => handleFinalizeSenderTransfer()}
+                          disabled={!receiverAnswerInput.trim() || isFinalizing}
+                          className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          {isFinalizing ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              <span>Connecting & Streaming Encrypted File...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="w-4 h-4" />
+                              <span>Finalize Connection & Stream Encrypted File</span>
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               )}
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-[11px] font-bold text-slate-700 block">
-                  Step 1: Paste Sender's Offer Token below:
-                </label>
-                <textarea
-                  placeholder="Paste Sender's Offer Token here..."
-                  value={senderOfferInput}
-                  onChange={(e) => setSenderOfferInput(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-indigo-500 font-mono h-20 resize-none"
-                />
-                <button
-                  onClick={() => handleProcessSenderOffer()}
-                  disabled={!senderOfferInput.trim()}
-                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  <span>Process Offer & Generate Answer</span>
-                </button>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <span>Step 1: Scan Sender's QR Code</span>
+                  </label>
+                  {!isScanningCamera && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        startCameraScanner((decoded) => {
+                          setSenderOfferInput(decoded);
+                          handleProcessSenderOffer(decoded);
+                        });
+                      }}
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Scan with Camera</span>
+                    </button>
+                  )}
+                </div>
+
+                {isScanningCamera ? (
+                  <div className="relative w-full max-w-xs mx-auto aspect-square rounded-2xl overflow-hidden bg-black border-2 border-indigo-500 shadow-lg flex items-center justify-center">
+                    <video
+                      ref={videoRef}
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
+                      <div className="w-44 h-44 border-2 border-dashed border-white/90 rounded-2xl animate-pulse shadow-2xl" />
+                      <p className="text-[10px] font-mono text-white/90 bg-black/60 px-3 py-1 rounded-full mt-3 backdrop-blur-sm">
+                        Point camera at sender's QR code
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={stopCamera}
+                      className="absolute bottom-3 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-rose-600/90 hover:bg-rose-700 text-white rounded-full text-xs font-bold shadow-md cursor-pointer transition-all"
+                    >
+                      Cancel Camera
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        startCameraScanner((decoded) => {
+                          setSenderOfferInput(decoded);
+                          handleProcessSenderOffer(decoded);
+                        });
+                      }}
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-indigo-500/20 transition-all cursor-pointer"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>Open Camera to Scan QR Code</span>
+                    </button>
+
+                    <div className="flex items-center gap-2 justify-center text-[10px] text-slate-400 font-bold uppercase tracking-wider py-1">
+                      <span className="h-px bg-slate-200 flex-1" />
+                      <span>Or paste token manually</span>
+                      <span className="h-px bg-slate-200 flex-1" />
+                    </div>
+
+                    <textarea
+                      placeholder="Paste Sender's Offer Token here..."
+                      value={senderOfferInput}
+                      onChange={(e) => setSenderOfferInput(e.target.value)}
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-indigo-500 font-mono h-20 resize-none shadow-inner"
+                    />
+                    <button
+                      onClick={() => handleProcessSenderOffer()}
+                      disabled={!senderOfferInput.trim()}
+                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>Process Pasted Token & Generate Answer</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {answerQr && (
