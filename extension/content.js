@@ -4784,7 +4784,7 @@
               cursor: pointer;
               transition: all 0.2s ease;
             `;
-            span.innerHTML = `<span>${tok.original}</span><span style="font-size:9px; background:#065f46; color:#a7f3d0; padding:1px 5px; border-radius:9999px; font-family:monospace; font-weight:700;">🔒 DECRYPTED</span>`;
+            span.innerHTML = `<span>${tok.original}</span><span style="user-select:none;-webkit-user-select:none;font-size:9px;background:#065f46;color:#a7f3d0;padding:1px 5px;border-radius:9999px;font-family:monospace;font-weight:700;pointer-events:none;">🔒 DECRYPTED</span>`;
             frag.appendChild(span);
           }
         });
@@ -4823,8 +4823,6 @@
   // -------------------------------------------------------------
   document.addEventListener('copy', (e) => {
     const vault = window._privoraTokenVault || [];
-    if (vault.length === 0) return;
-
     const selection = window.getSelection()?.toString();
     if (!selection || selection.length < 3) return;
 
@@ -4837,16 +4835,25 @@
       }
     }
 
-    if (hitCount > 0) {
+    const hadBadge = restored.includes('DECRYPTED') || restored.includes('🔒');
+    if (hadBadge) {
+      // Strip any badge tag artifact from clipboard so copied text is 100% clean
+      restored = restored.replace(/[\s\u00A0]*🔒[\s\u00A0]*DECRYPTED/gi, '');
+      restored = restored.replace(/[\s\u00A0]*\[\s*🔒?\s*DECRYPTED\s*\]/gi, '');
+    }
+
+    if (hitCount > 0 || hadBadge) {
       if (e.clipboardData) {
         e.clipboardData.setData('text/plain', restored);
         e.preventDefault();
-        showPrivoraHud({
-          type: 'success',
-          title: 'Privora Shield · Clipboard Restored',
-          subtitle: `Restored ${hitCount} real value(s) in copied text without token placeholders.`,
-          durationMs: 3000
-        });
+        if (hitCount > 0) {
+          showPrivoraHud({
+            type: 'success',
+            title: 'Privora Shield · Clipboard Restored',
+            subtitle: `Restored ${hitCount} real value(s) in copied text without token placeholders.`,
+            durationMs: 3000
+          });
+        }
       }
     }
   }, true);
