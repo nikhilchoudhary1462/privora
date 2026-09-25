@@ -983,27 +983,67 @@
         }
       }
 
-      // Check whether this document is a PAN card (either by filename or PAN aspect ratio/photo layout)
-      const isPanCard = isPan || (!isAadhaar && (w / h > 1.35 || skinRight > 25));
+      // 3. Multi-Factor Visual Document Classification & Sensitive Region Detection
+      // A. QR Code Detection on Right Side (Signature of Aadhaar cards)
+      let qrTransitions = 0;
+      const qrStartX = Math.round(sw * 0.55);
+      const qrEndX = Math.round(sw * 0.95);
+      const qrStartY = Math.round(cardTop + (cardBottom - cardTop) * 0.18);
+      const qrEndY = Math.round(cardTop + (cardBottom - cardTop) * 0.76);
 
-      if (isPanCard) {
-        // --- PAN CARD PROTECTION: PHOTO + PAN NUMBER ONLY ---
-        // 1. Photo: located strictly below top header ("INCOME TAX DEPARTMENT")
-        // Starts at y: ~20% of card height, height: ~42% of card height, width: ~23% of card width
+      for (let y = qrStartY; y < qrEndY; y += 2) {
+        let prevDark = false;
+        for (let x = qrStartX; x < qrEndX; x++) {
+          const i = (y * sw + x) * 4;
+          const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          const isDark = lum < 95;
+          if (isDark !== prevDark) {
+            qrTransitions++;
+            prevDark = isDark;
+          }
+        }
+      }
+      const hasQrCode = qrTransitions > 60;
+
+      // B. Top Ribbon Header Color Check (Tricolor / Saffron on Aadhaar vs Cyan / Blue on PAN)
+      let saffronPixels = 0;
+      let blueHeaderPixels = 0;
+      const ribbonTop = cardTop;
+      const ribbonBottom = Math.round(cardTop + (cardBottom - cardTop) * 0.20);
+      for (let y = ribbonTop; y < ribbonBottom; y++) {
+        for (let x = 0; x < sw; x++) {
+          const i = (y * sw + x) * 4;
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if (r > 175 && g > 75 && g < 175 && b < 85 && (r - b > 85)) {
+            saffronPixels++;
+          }
+          if (b > 110 && b > r + 35 && b > g + 15) {
+            blueHeaderPixels++;
+          }
+        }
+      }
+      const hasSaffronHeader = saffronPixels > 10;
+      const hasPanBlueHeader = blueHeaderPixels > 30;
+
+      // C. Document Classification
+      const isExplicitPan = isPan || (!isAadhaar && !hasQrCode && (hasPanBlueHeader || (skinRight > skinLeft + 25 && skinRight > 30)));
+
+      if (isExplicitPan) {
+        // --- PAN CARD PROTECTION: PHOTO + PAN NUMBER ---
         let pX = 0;
         let pY = Math.round(cardY + cardH * 0.20);
-        let pW = Math.round(w * 0.23);
-        let pH = Math.round(cardH * 0.42);
+        let pW = Math.round(w * 0.24);
+        let pH = Math.round(cardH * 0.46);
 
         if (skinRight > skinLeft + 25 && skinRight > 30) {
           // Rare UTIITSL PAN cards where photo is on the right
           pX = Math.round(w * 0.68);
-          pW = Math.round(w * 0.25);
-          pY = Math.round(cardY + cardH * 0.25);
-          pH = Math.round(cardH * 0.45);
+          pW = Math.round(w * 0.26);
+          pY = Math.round(cardY + cardH * 0.22);
+          pH = Math.round(cardH * 0.48);
         } else if (skinLeft > 15 && maxYLeft > minYLeft && minYLeft > cardH * 0.12) {
           pY = Math.max(Math.round(cardY + cardH * 0.18), Math.round((minYLeft - 10) / scale));
-          pH = Math.min(Math.round(cardH * 0.46), Math.max(Math.round(cardH * 0.38), Math.round((maxYLeft + 10) / scale) - pY));
+          pH = Math.min(Math.round(cardH * 0.48), Math.max(Math.round(cardH * 0.38), Math.round((maxYLeft + 10) / scale) - pY));
         }
 
         boxes.push({
@@ -1014,12 +1054,9 @@
           label: 'Face Photo'
         });
 
-        // 2. PAN Number: strictly the 10-character PAN number row in the center-left
-        // Directly below "Permanent Account Number Card", above "Name"
-        // Exactly at y: 38% to 54% of card height, x: 21% to 65% of card width
-        const panX = Math.round(w * 0.21);
+        const panX = Math.round(w * 0.20);
         const panY = Math.round(cardY + cardH * 0.38);
-        const panW = Math.round(w * 0.44);
+        const panW = Math.round(w * 0.46);
         const panH = Math.round(cardH * 0.16);
 
         boxes.push({
@@ -1033,34 +1070,32 @@
         return boxes;
       }
 
-      // --- AADHAAR CARD PROTECTION: PHOTO + AADHAAR NUMBER ONLY ---
-      if (skinLeft > 20 && maxXLeft > minXLeft && maxYLeft > minYLeft) {
-        const fX = 0;
-        const fY = Math.max(cardY, Math.min(Math.round((minYLeft - 15) / scale), Math.round(cardY + cardH * 0.18)));
-        const fW = Math.min(Math.round(w * 0.24), Math.max(Math.round(w * 0.20), Math.round((maxXLeft + 10) / scale)));
-        const fH = Math.min(Math.round(cardH * 0.74), Math.max(Math.round(cardH * 0.40), Math.round((maxYLeft + 15) / scale) - fY));
-        boxes.push({
-          x: fX,
-          y: fY,
-          width: fW,
-          height: fH,
-          label: 'Face Photo'
-        });
-      } else {
-        boxes.push({
-          x: 0,
-          y: Math.round(cardY + cardH * 0.18),
-          width: Math.round(w * 0.22),
-          height: Math.round(cardH * 0.55),
-          label: 'Face Photo'
-        });
+      // --- AADHAAR CARD PROTECTION: PHOTO + AADHAAR NUMBER + QR MATRIX ---
+      // 1. Biometric Face Photo (left side)
+      let fX = 0;
+      let fY = Math.round(cardY + cardH * 0.16);
+      let fW = Math.round(w * 0.28);
+      let fH = Math.round(cardH * 0.54);
+
+      if (skinLeft > 15 && maxXLeft > minXLeft && maxYLeft > minYLeft) {
+        fY = Math.max(cardY, Math.min(Math.round((minYLeft - 10) / scale), Math.round(cardY + cardH * 0.15)));
+        fW = Math.min(Math.round(w * 0.32), Math.max(Math.round(w * 0.22), Math.round((maxXLeft + 10) / scale)));
+        fH = Math.min(Math.round(cardH * 0.62), Math.max(Math.round(cardH * 0.48), Math.round((maxYLeft + 15) / scale) - fY));
       }
 
-      // 3. Add Aadhaar Number Box (strictly covering the 12-digit Aadhaar number row near the bottom of the card)
-      const aadhY = Math.round(cardY + cardH * 0.74);
-      const aadhH = Math.round(cardH * 0.14);
-      const aadhW = Math.round(w * 0.64);
-      const aadhX = Math.round(w * 0.18);
+      boxes.push({
+        x: fX,
+        y: fY,
+        width: fW,
+        height: fH,
+        label: 'Face Photo'
+      });
+
+      // 2. 12-Digit Aadhaar Number Box (MANDATORY: strictly covers the full 12-digit row at the bottom)
+      const aadhX = Math.round(w * 0.14);
+      const aadhY = Math.round(cardY + cardH * 0.67);
+      const aadhW = Math.round(w * 0.72);
+      const aadhH = Math.round(cardH * 0.17);
 
       boxes.push({
         x: aadhX,
@@ -1069,6 +1104,22 @@
         height: aadhH,
         label: 'Aadhaar Number'
       });
+
+      // 3. QR Code Matrix Box (Right side - contains digital biometric/demographic identity)
+      if (hasQrCode || !isExplicitPan) {
+        const qrX = Math.round(w * 0.58);
+        const qrY = Math.round(cardY + cardH * 0.22);
+        const qrW = Math.round(w * 0.38);
+        const qrH = Math.round(cardH * 0.48);
+
+        boxes.push({
+          x: qrX,
+          y: qrY,
+          width: qrW,
+          height: qrH,
+          label: 'QR Matrix'
+        });
+      }
 
       return boxes;
     } catch (err) {
@@ -1082,17 +1133,24 @@
       return [
         {
           x: 0,
-          y: Math.round(h * 0.20),
-          width: Math.round(w * 0.22),
-          height: Math.round(h * 0.55),
+          y: Math.round(h * 0.16),
+          width: Math.round(w * 0.28),
+          height: Math.round(h * 0.54),
           label: 'Face Photo'
         },
         {
-          x: Math.round(w * 0.18),
-          y: Math.round(h * 0.74),
-          width: Math.round(w * 0.64),
-          height: Math.round(h * 0.14),
+          x: Math.round(w * 0.14),
+          y: Math.round(h * 0.67),
+          width: Math.round(w * 0.72),
+          height: Math.round(h * 0.17),
           label: 'Aadhaar Number'
+        },
+        {
+          x: Math.round(w * 0.58),
+          y: Math.round(h * 0.22),
+          width: Math.round(w * 0.38),
+          height: Math.round(h * 0.48),
+          label: 'QR Matrix'
         }
       ];
     }
@@ -2220,27 +2278,30 @@
 
           // Sensible default positions for Indian Government IDs
           if (currentBoxes.length === 0) {
-            if (fn.includes('aadhaar') || fn.includes('id') || fn.includes('pan') || fn.includes('card') || fn.includes('image') || fn.includes('whatsapp')) {
+            const detected = detectFaceOrSensitiveRegions(canvas, file.name);
+            if (detected && detected.length > 0) {
+              currentBoxes = [...detected];
+            } else {
               currentBoxes.push({
-                x: Math.round(canvas.width * 0.10),
-                y: Math.round(canvas.height * 0.28),
-                width: Math.round(canvas.width * 0.16),
-                height: Math.round(canvas.height * 0.38),
+                x: 0,
+                y: Math.round(canvas.height * 0.16),
+                width: Math.round(canvas.width * 0.28),
+                height: Math.round(canvas.height * 0.54),
                 label: 'Face Photo'
               });
               currentBoxes.push({
-                x: Math.round(canvas.width * 0.32),
-                y: Math.round(canvas.height * 0.35),
-                width: Math.round(canvas.width * 0.28),
-                height: Math.round(canvas.height * 0.14),
-                label: 'Name / DOB'
+                x: Math.round(canvas.width * 0.14),
+                y: Math.round(canvas.height * 0.67),
+                width: Math.round(canvas.width * 0.72),
+                height: Math.round(canvas.height * 0.17),
+                label: 'Aadhaar Number'
               });
               currentBoxes.push({
-                x: Math.round(canvas.width * 0.30),
-                y: Math.round(canvas.height * 0.80),
-                width: Math.round(canvas.width * 0.40),
-                height: Math.round(canvas.height * 0.12),
-                label: 'ID Number'
+                x: Math.round(canvas.width * 0.58),
+                y: Math.round(canvas.height * 0.22),
+                width: Math.round(canvas.width * 0.38),
+                height: Math.round(canvas.height * 0.48),
+                label: 'QR Matrix'
               });
             }
           }
@@ -2582,11 +2643,11 @@
     if (addIdBtn) {
       addIdBtn.onclick = () => {
         currentBoxes.push({
-          x: Math.round(canvas.width * 0.30),
-          y: Math.round(canvas.height * 0.80),
-          width: Math.round(canvas.width * 0.40),
-          height: Math.round(canvas.height * 0.12),
-          label: 'ID Number'
+          x: Math.round(canvas.width * 0.14),
+          y: Math.round(canvas.height * 0.67),
+          width: Math.round(canvas.width * 0.72),
+          height: Math.round(canvas.height * 0.17),
+          label: 'Aadhaar / ID Number'
         });
         selectedBoxIdx = currentBoxes.length - 1;
         updateCropsToolbar();
@@ -2598,10 +2659,10 @@
     if (addQrBtn) {
       addQrBtn.onclick = () => {
         currentBoxes.push({
-          x: Math.round(canvas.width * 0.68),
-          y: Math.round(canvas.height * 0.64),
-          width: Math.round(canvas.width * 0.24),
-          height: Math.round(canvas.height * 0.26),
+          x: Math.round(canvas.width * 0.58),
+          y: Math.round(canvas.height * 0.22),
+          width: Math.round(canvas.width * 0.38),
+          height: Math.round(canvas.height * 0.48),
           label: 'QR Matrix'
         });
         selectedBoxIdx = currentBoxes.length - 1;
