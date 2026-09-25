@@ -15,10 +15,49 @@ export class RegexDetector {
     return validateLuhn(numStr);
   }
 
-  // PAN validation
+  // Positional PAN candidate normalization strictly by character class
+  public static normalizePanCandidate(str: string): { normalized: string; wasCorrected: boolean } | null {
+    if (!str) return null;
+    const clean = str.replace(/[-\s]/g, '').toUpperCase();
+    if (clean.length !== 10) return null;
+
+    let wasCorrected = false;
+    const chars = clean.split('');
+
+    // Positions 1–5: Expected letters (A-Z)
+    for (let i = 0; i < 5; i++) {
+      const c = chars[i];
+      if (c === '0') { chars[i] = 'O'; wasCorrected = true; }
+      else if (c === '1') { chars[i] = 'I'; wasCorrected = true; }
+      else if (c === '8') { chars[i] = 'B'; wasCorrected = true; }
+      else if (!/^[A-Z]$/.test(chars[i])) return null;
+    }
+
+    // Positions 6–9: Expected digits (0-9)
+    for (let i = 5; i < 9; i++) {
+      const c = chars[i];
+      if (c === 'O') { chars[i] = '0'; wasCorrected = true; }
+      else if (c === 'I' || c === 'L') { chars[i] = '1'; wasCorrected = true; }
+      else if (c === 'B') { chars[i] = '8'; wasCorrected = true; }
+      else if (c === 'S') { chars[i] = '5'; wasCorrected = true; }
+      else if (c === 'Z') { chars[i] = '2'; wasCorrected = true; }
+      else if (!/^[0-9]$/.test(chars[i])) return null;
+    }
+
+    // Position 10: Expected letter (A-Z)
+    const c10 = chars[9];
+    if (c10 === '0') { chars[9] = 'O'; wasCorrected = true; }
+    else if (c10 === '1') { chars[9] = 'I'; wasCorrected = true; }
+    else if (!/^[A-Z]$/.test(chars[9])) return null;
+
+    const normalized = chars.join('');
+    return { normalized, wasCorrected };
+  }
+
+  // Strict PAN validation (official government format: 5 uppercase letters, 4 digits, 1 uppercase letter)
   public static validatePAN(str: string): boolean {
     const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
-    return panRegex.test(str.trim());
+    return panRegex.test(str ? str.trim() : '');
   }
 
   // US SSN Validation
@@ -124,37 +163,45 @@ export class RegexDetector {
 
     let idCounter = 1;
 
-    // 1. Indian PAN Card
-    const panRegex = /\b([A-Z]{5}[0-9]{4}[A-Z]{1})\b/g;
+    // 1. Indian PAN Card (case-insensitive, flexible spacing, positional normalization)
+    const panRegex = /\b([A-Za-z0-9]{5}[-\s]?[A-Za-z0-9]{4}[-\s]?[A-Za-z0-9]{1})\b/g;
     let match: RegExpExecArray | null;
+    const seenPanValues = new Set<string>();
     while ((match = panRegex.exec(text)) !== null) {
-      const candidate = match[1];
-      if (this.validatePAN(candidate)) {
+      const rawMatch = match[1];
+      const panResult = this.normalizePanCandidate(rawMatch);
+      if (panResult && !seenPanValues.has(panResult.normalized)) {
+        seenPanValues.add(panResult.normalized);
         results.push({
           id: `pii_pan_${idCounter++}`,
           type: 'PAN_CARD',
-          label: 'PAN Card',
-          value: candidate,
-          confidence: 0.99,
+          label: panResult.wasCorrected ? 'PAN Card (OCR Repaired)' : 'PAN Card',
+          value: panResult.normalized,
+          confidence: panResult.wasCorrected ? 0.92 : 0.99,
           complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
           recommendation: 'Selective region blur or envelope encryption mandated by DPDP Act 2023.',
         });
       }
     }
 
-    // 2. Indian Aadhaar Number
+    // 2. Indian Aadhaar Number (Two-Tier: 0.99 for verified Verhoeff, 0.85 for unverified candidate)
     const aadhaarRegex = /\b([2-9]{1}[0-9]{3}[-\s]?[0-9]{4}[-\s]?[0-9]{4})\b/g;
+    const seenAadhaarDigits = new Set<string>();
     while ((match = aadhaarRegex.exec(text)) !== null) {
       const rawDigits = match[1].replace(/[-\s]/g, '');
-      if (this.validateVerhoeff(rawDigits)) {
+      if (rawDigits.length === 12 && !seenAadhaarDigits.has(rawDigits)) {
+        seenAadhaarDigits.add(rawDigits);
+        const isChecksumValid = this.validateVerhoeff(rawDigits);
         results.push({
           id: `pii_aadhaar_${idCounter++}`,
           type: 'AADHAAR',
-          label: 'Aadhaar UID',
+          label: isChecksumValid ? 'Aadhaar UID' : 'Aadhaar UID (Candidate)',
           value: match[1],
-          confidence: 0.99,
+          confidence: isChecksumValid ? 0.99 : 0.85,
           complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
-          recommendation: 'Aadhaar Regulations mandate masking of first 8 digits or full encryption.',
+          recommendation: isChecksumValid 
+            ? 'Aadhaar Regulations mandate masking of first 8 digits or full encryption.'
+            : 'Aadhaar candidate with unverified checksum. Redaction recommended under DPDP Act 2023.',
         });
       }
     }

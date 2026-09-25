@@ -181,15 +181,24 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
 
           // Border
           const isSelected = item.id === selectedItemId;
-          ctx.strokeStyle = isSelected ? '#4f46e5' : '#6366f1';
+          const isEstimated = box.boxConfidence === 'ESTIMATED';
+          if (isEstimated && !box.boxVerified) {
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = isSelected ? '#d97706' : '#f59e0b';
+          } else {
+            ctx.setLineDash([]);
+            ctx.strokeStyle = isSelected ? '#4f46e5' : '#6366f1';
+          }
           ctx.lineWidth = isSelected ? 3 : Math.max(2, Math.floor(canvas.width / 400));
           ctx.strokeRect(bx, by, bw, bh);
+          ctx.setLineDash([]);
 
           // Region Tag
           const fontSize = Math.max(11, Math.min(14, Math.floor(canvas.width / 50)));
           ctx.font = `bold ${fontSize}px "Fira Code", monospace`;
-          ctx.fillStyle = isSelected ? '#3730a3' : '#4f46e5';
-          ctx.fillText(`🔒 ${item.type}`, bx + 4, Math.max(by + fontSize + 2, fontSize + 4));
+          ctx.fillStyle = isEstimated && !box.boxVerified ? '#b45309' : isSelected ? '#3730a3' : '#4f46e5';
+          const labelPrefix = isEstimated ? (box.boxVerified ? '✓ ' : '⚠️ ') : '🔒 ';
+          ctx.fillText(`${labelPrefix}${item.type}${isEstimated && !box.boxVerified ? ' [VERIFY]' : ''}`, bx + 4, Math.max(by + fontSize + 2, fontSize + 4));
 
           // Draw Interactive Corner Handles if Selected
           if (isSelected) {
@@ -411,6 +420,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
             newBox.x = newX;
           }
 
+          newBox.boxVerified = true;
           return { ...item, boundingBox: newBox };
         })
       };
@@ -445,6 +455,8 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
             height,
             label: 'Custom Redacted Area',
             isNormalized: false,
+            boxConfidence: 'EXACT',
+            boxVerified: true,
           },
         };
 
@@ -482,9 +494,29 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
           const newY = Math.max(0, box.y - Math.round(dh / 2));
           return {
             ...item,
-            boundingBox: { ...box, x: newX, y: newY, width: newW, height: newH }
+            boundingBox: { ...box, x: newX, y: newY, width: newW, height: newH, boxVerified: true }
           };
         })
+      };
+    });
+  };
+
+  // Verify an estimated bounding box region
+  const handleVerifyEstimatedBox = (itemId: string) => {
+    setDetection(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        detectedItems: prev.detectedItems.map(item => {
+          if (item.id !== itemId || !item.boundingBox) return item;
+          return {
+            ...item,
+            boundingBox: {
+              ...item.boundingBox,
+              boxVerified: true,
+            },
+          };
+        }),
       };
     });
   };
@@ -1109,6 +1141,24 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
         }
 
         case 'ENCRYPT_REGION': {
+          // Execution Gate Matrix: Prevent fail-open leakage of detected sensitive PII
+          const unverifiedEstimated = detection.detectedItems.filter(
+            i => i.boundingBox?.boxConfidence === 'ESTIMATED' && !i.boundingBox.boxVerified
+          );
+          const missingSpatial = detection.detectedItems.filter(
+            i => !i.boundingBox || i.boundingBox.boxConfidence === 'MISSING' || (i.boundingBox.width === 0 && i.boundingBox.height === 0)
+          );
+
+          if (unverifiedEstimated.length > 0) {
+            const names = unverifiedEstimated.map(i => i.label).join(', ');
+            throw new Error(`Selective Encryption Blocked: Estimated bounding box for [${names}] requires user verification. Please adjust or confirm the region on the canvas before encrypting.`);
+          }
+
+          if (missingSpatial.length > 0) {
+            const names = missingSpatial.map(i => i.label).join(', ');
+            throw new Error(`Security Guardrail Triggered: Sensitive item [${names}] was detected in text, but could not be located on the canvas. Please draw a manual bounding box or select 'Full File Encryption' to avoid data leakage.`);
+          }
+
           const isOriginalPdf = currentFile.name.toLowerCase().endsWith('.pdf') || currentFile.type === 'application/pdf';
           const isOriginalImage = currentFile.type.startsWith('image/') || currentFile.name.match(/\.(png|jpe?g|webp|svg|bmp)$/i);
           const baseName = detection.fileName.replace(/\.[^/.]+$/, '');
@@ -1970,13 +2020,35 @@ console.log("Starting secure daemon...");`;
                                   : 'bg-[#FAF9F6] text-[#212529] border-black/5 hover:border-[#9C8DD4]'
                               }`}
                             >
-                              <div className="flex items-center gap-1.5 truncate max-w-[190px]">
+                              <div className="flex items-center gap-1.5 truncate max-w-[175px]">
                                 {isLocalAi ? (
                                   <Bot className="w-3.5 h-3.5 text-[#9C8DD4] shrink-0" />
                                 ) : (
                                   <ShieldAlert className="w-3.5 h-3.5 text-[#9C8DD4] shrink-0" />
                                 )}
                                 <span className="truncate">{item.label}</span>
+                                {item.boundingBox?.boxConfidence === 'ESTIMATED' && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleVerifyEstimatedBox(item.id);
+                                    }}
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-sans font-bold shrink-0 ${
+                                      item.boundingBox.boxVerified
+                                        ? 'bg-emerald-100 text-emerald-700'
+                                        : 'bg-amber-100 text-amber-800 animate-pulse hover:bg-amber-200'
+                                    }`}
+                                    title={item.boundingBox.boxVerified ? "Position verified" : "Click to verify estimated position"}
+                                  >
+                                    {item.boundingBox.boxVerified ? '✓ Verified' : '⚠️ Verify'}
+                                  </button>
+                                )}
+                                {item.boundingBox?.boxConfidence === 'MISSING' && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-red-100 text-red-800 font-sans font-bold shrink-0">
+                                    No Box
+                                  </span>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-1 shrink-0">

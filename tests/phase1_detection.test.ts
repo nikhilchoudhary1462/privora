@@ -18,12 +18,11 @@ describe('Phase 1: Deterministic Detection - Hardened Regex PII Suite', () => {
       });
     });
 
-    it('should reject invalid PAN formats, lowercase, and partial fragments', () => {
+    it('should reject invalid PAN formats and partial fragments', () => {
       const invalidPANs = [
         '12345ABCDE',   // Digits first
         'ABCDE1234',    // Too short (9 chars)
         'ABCDE12345',   // Missing trailing letter
-        'abcde1234f',   // Lowercase
         'ABC12345F',    // 3 letters instead of 5
         'ABCDEF1234F',  // 6 letters
       ];
@@ -33,6 +32,19 @@ describe('Phase 1: Deterministic Detection - Hardened Regex PII Suite', () => {
         const detected = RegexDetector.scanText(`Invalid value ${pan}`);
         expect(detected.some(d => d.type === 'PAN_CARD')).toBe(false);
       });
+
+      // Strict validatePAN rejects lowercase, but scanText repairs it via positional OCR normalization
+      expect(RegexDetector.validatePAN('abcde1234f')).toBe(false);
+      const repaired = RegexDetector.scanText('Scanned value abcde1234f');
+      expect(repaired.some(d => d.type === 'PAN_CARD' && d.value === 'ABCDE1234F')).toBe(true);
+    });
+
+    it('should apply positional OCR normalization for PAN candidates (slots 1-5 & 10 letters, slots 6-9 digits)', () => {
+      expect(RegexDetector.normalizePanCandidate('1BCDE1234F')?.normalized).toBe('IBCDE1234F');
+      expect(RegexDetector.normalizePanCandidate('ABCDE12340')?.normalized).toBe('ABCDE1234O');
+      expect(RegexDetector.normalizePanCandidate('ABCDEO123F')?.normalized).toBe('ABCDE0123F');
+      expect(RegexDetector.normalizePanCandidate('ABCDEI23BF')?.normalized).toBe('ABCDE1238F');
+      expect(RegexDetector.normalizePanCandidate('INCOMETAXD')).toBeNull();
     });
   });
 
@@ -54,18 +66,26 @@ describe('Phase 1: Deterministic Detection - Hardened Regex PII Suite', () => {
         const raw = aadhaar.replace(/\D/g, '');
         expect(RegexDetector.validateVerhoeff(raw)).toBe(true);
         const detected = RegexDetector.scanText(`Aadhaar card number: ${aadhaar}`);
-        expect(detected.some(d => d.type === 'AADHAAR')).toBe(true);
+        expect(detected.some(d => d.type === 'AADHAAR' && d.confidence === 0.99)).toBe(true);
       });
     });
 
-    it('should reject invalid Aadhaar checksums, short/long numbers, and 0/1 prefix numbers', () => {
+    it('should handle two-tier Aadhaar classification (verified vs unverified) and reject malformed lengths/prefixes', () => {
       const validBase = RegexDetector.generateVerhoeffChecksum('23456789012');
       const lastDigit = parseInt(validBase.slice(-1), 10);
       const corruptLastDigit = (lastDigit + 1) % 10;
       const corruptedChecksum = validBase.substring(0, 11) + corruptLastDigit;
 
+      // Verhoeff algorithm strictly distinguishes corrupted check digit
+      expect(RegexDetector.validateVerhoeff(validBase)).toBe(true);
+      expect(RegexDetector.validateVerhoeff(corruptedChecksum)).toBe(false);
+
+      // Two-tier Aadhaar architecture: Unverified Verhoeff is captured as Candidate (confidence 0.85) to prevent silent leakage
+      const detectedCorrupt = RegexDetector.scanText(`Candidate number: ${corruptedChecksum}`);
+      expect(detectedCorrupt.some(d => d.type === 'AADHAAR' && d.confidence === 0.85)).toBe(true);
+
+      // Structurally invalid formats (wrong length or starting with 0/1) are strictly rejected
       const invalidAadhaars = [
-        corruptedChecksum, // Corrupted Verhoeff checksum
         '2345 6789 012',   // 11 digits
         '2345 6789 01234', // 13 digits
         '0345 6789 0123',  // Starts with 0

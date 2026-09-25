@@ -1,3 +1,5 @@
+export type BoundingBoxConfidence = 'EXACT' | 'ESTIMATED' | 'MISSING';
+
 export interface BoundingBox {
   x: number;      // fraction 0..1 or pixel coordinate
   y: number;
@@ -5,6 +7,8 @@ export interface BoundingBox {
   height: number;
   label?: string;
   isNormalized?: boolean;
+  boxConfidence?: BoundingBoxConfidence;
+  boxVerified?: boolean;
 }
 
 export type PiiType = 
