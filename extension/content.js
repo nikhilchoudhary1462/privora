@@ -255,8 +255,44 @@
   }
 
   // -------------------------------------------------------------
-  // 3. Centralized In-Page Floating HUD Notifications & Status Cards
+  // 3. Session Encryption Tracking & Centralized In-Page Floating HUD
   // -------------------------------------------------------------
+  window._privoraSiteHasEncryptedFiles = window._privoraSiteHasEncryptedFiles || false;
+  try {
+    if (sessionStorage.getItem('privora_has_encrypted') === 'true') {
+      window._privoraSiteHasEncryptedFiles = true;
+    }
+  } catch (e) {}
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(['aegis_active_manifests'], (res) => {
+      const active = res?.aegis_active_manifests || [];
+      const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
+      if (currentHost && active.some(m => {
+        const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+        return mHost && (mHost === currentHost || mHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + mHost));
+      })) {
+        window._privoraSiteHasEncryptedFiles = true;
+      }
+    });
+  }
+
+  function hasSiteEncryptedFiles() {
+    if (window._privoraSiteHasEncryptedFiles) return true;
+    try {
+      if (sessionStorage.getItem('privora_has_encrypted') === 'true') return true;
+    } catch (e) {}
+
+    const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
+    if (!currentHost) return false;
+
+    const memManifests = window._privoraRecentManifests || [];
+    return memManifests.some(m => {
+      const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+      return mHost && (mHost === currentHost || mHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + mHost));
+    });
+  }
+
   let activeHud = null;
   let hudTimer = null;
 
@@ -575,6 +611,11 @@
   }
 
   function saveManifest(manifest) {
+    window._privoraSiteHasEncryptedFiles = true;
+    try {
+      sessionStorage.setItem('privora_has_encrypted', 'true');
+    } catch (e) {}
+
     // 1. Maintain instant in-memory session cache
     window._privoraRecentManifests = window._privoraRecentManifests || [];
     window._privoraRecentManifests.unshift(manifest);
@@ -2323,6 +2364,115 @@
   // -------------------------------------------------------------
   // 7. Automatic Download Interceptor & In-Place Retracer
   // -------------------------------------------------------------
+
+  function findMatchingManifest(manifests, candidateName) {
+    if (!manifests || manifests.length === 0) return null;
+
+    const candidate = (candidateName || '').toLowerCase();
+    const candidateIsPan = candidate.includes('pan');
+    const candidateIsAadhaar = candidate.includes('aadhaar') || candidate.includes('adhar');
+    const currentHost = (window.location.hostname || '').replace(/^www\./, '').toLowerCase();
+
+    // Priority 1: Exact or substring match of filename base
+    let matched = manifests.find(m => {
+      const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
+      const fBase = candidate.replace(/\.[^/.]+$/, '').toLowerCase();
+      return mBase && fBase && (fBase.includes(mBase) || mBase.includes(fBase));
+    });
+
+    // Priority 2: Document type keyword match on the SAME site
+    if (!matched && (candidateIsPan || candidateIsAadhaar)) {
+      matched = manifests.find(m => {
+        const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+        const isHostMatch = mHost && (mHost === currentHost || mHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + mHost));
+        if (!isHostMatch) return false;
+        const mFn = (m.fileName || '').toLowerCase();
+        return (candidateIsPan && mFn.includes('pan')) || (candidateIsAadhaar && (mFn.includes('aadhaar') || mFn.includes('adhar')));
+      });
+    }
+
+    // Priority 3: Generic compression/download output name ON THE SAME SITE
+    if (!matched && currentHost) {
+      const isGeneric = candidate.includes('compressed') ||
+        candidate.includes('min') ||
+        candidate.includes('download') ||
+        candidate.includes('image') ||
+        candidate.includes('output') ||
+        candidate.includes('result') ||
+        candidate.includes('edit');
+      if (isGeneric) {
+        matched = manifests.find(m => {
+          const mHost = (m.hostname || '').replace(/^www\./, '').toLowerCase();
+          return mHost && (mHost === currentHost || mHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + mHost));
+        });
+      }
+    }
+
+    return matched || null;
+  }
+
+  function isPrivoraMaskPresent(canvas, slices) {
+    if (!canvas || !slices || slices.length === 0) return false;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return false;
+
+    // Check each slice: if any primary protected region contains the synthetic checkerboard mask
+    for (const slice of slices) {
+      const sx = Math.round(slice.normX * canvas.width);
+      const sy = Math.round(slice.normY * canvas.height);
+      const sw = Math.round(slice.normW * canvas.width);
+      const sh = Math.round(slice.normH * canvas.height);
+
+      if (sw < 12 || sh < 12) continue;
+
+      // Sample with 10% inner padding to avoid anti-aliasing / edge blending artifacts
+      const insetX = Math.max(0, sx + Math.round(sw * 0.10));
+      const insetY = Math.max(0, sy + Math.round(sh * 0.10));
+      const insetW = Math.min(canvas.width - insetX, Math.max(1, Math.round(sw * 0.80)));
+      const insetH = Math.min(canvas.height - insetY, Math.max(1, Math.round(sh * 0.80)));
+
+      try {
+        const imgData = ctx.getImageData(insetX, insetY, insetW, insetH);
+        const data = imgData.data;
+        let maskPixelHits = 0;
+        let totalSamples = 0;
+
+        // Sample a grid across the protected slice
+        const stepX = Math.max(1, Math.floor(insetW / 6));
+        const stepY = Math.max(1, Math.floor(insetH / 6));
+
+        for (let y = stepY; y < insetH; y += stepY) {
+          for (let x = stepX; x < insetW; x += stepX) {
+            totalSamples++;
+            const idx = (y * insetW + x) * 4;
+            const r = data[idx];
+            const g = data[idx + 1];
+            const b = data[idx + 2];
+            const brightness = (r + g + b) / 3;
+
+            // Privora's synthetic mask tiles are:
+            // Color 1: #0f172a -> rgba(15, 23, 42)
+            // Color 2: #334155 -> rgba(51, 65, 85)
+            // Post-compression (JPEG 50-90%): dark slate blue hue with low brightness
+            const isDarkSlate = r <= 80 && g <= 100 && b <= 125 && brightness <= 90 && b >= (r - 12);
+            if (isDarkSlate) {
+              maskPixelHits++;
+            }
+          }
+        }
+
+        // If >= 50% of sampled pixels match the synthetic dark slate mask, this slice is shielded!
+        if (totalSamples > 0 && (maskPixelHits / totalSamples) >= 0.50) {
+          return true;
+        }
+      } catch (e) {
+        console.warn('[Privora Shield] Could not inspect image pixels for synthetic mask:', e);
+      }
+    }
+
+    return false;
+  }
+
   async function retraceAndRestoreImage(imageBlob, fileName) {
     const memoryManifests = window._privoraRecentManifests || [];
 
@@ -2354,38 +2504,7 @@
           return;
         }
 
-        const candidate = (fileName || '').toLowerCase();
-        const candidateIsPan = candidate.includes('pan');
-        const candidateIsAadhaar = candidate.includes('aadhaar') || candidate.includes('adhar');
-
-        // Match Priority 1: Exact or substring match of filename base
-        let matched = manifests.find(m => {
-          const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
-          const fBase = candidate.replace(/\.[^/.]+$/, '').toLowerCase();
-          return mBase && fBase && (fBase.includes(mBase) || mBase.includes(fBase));
-        });
-
-        // Match Priority 2: Document type keyword match (PAN matches PAN, Aadhaar matches Aadhaar)
-        if (!matched && (candidateIsPan || candidateIsAadhaar)) {
-          matched = manifests.find(m => {
-            const mFn = (m.fileName || '').toLowerCase();
-            return (candidateIsPan && mFn.includes('pan')) || (candidateIsAadhaar && (mFn.includes('aadhaar') || mFn.includes('adhar')));
-          });
-        }
-
-        // Match Priority 3: Same site / hostname match
-        if (!matched) {
-          const currentHost = (window.location.hostname || '').replace(/^www\./, '');
-          matched = manifests.find(m => {
-            const mHost = (m.hostname || '').replace(/^www\./, '');
-            return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
-          });
-        }
-
-        // Match Priority 4: Most recent session
-        if (!matched && manifests.length > 0 && Date.now() - manifests[0].timestamp < 2 * 60 * 60 * 1000) {
-          matched = manifests[0];
-        }
+        const matched = findMatchingManifest(manifests, fileName);
 
         if (!matched || !matched.slices || matched.slices.length === 0) {
           resolve(null);
@@ -2400,8 +2519,26 @@
           const height = img.naturalHeight || matched.originalHeight;
           patchCanvas.width = width;
           patchCanvas.height = height;
-          const pCtx = patchCanvas.getContext('2d');
+          const pCtx = patchCanvas.getContext('2d', { willReadFrequently: true });
           pCtx.drawImage(img, 0, 0, patchCanvas.width, patchCanvas.height);
+
+          // VERIFY SYNTHETIC MASK PRESENCE:
+          // Make sure this image actually contains Privora's synthetic checkerboard mask!
+          const maskVerified = isPrivoraMaskPresent(patchCanvas, matched.slices);
+          if (!maskVerified) {
+            console.log('[Privora Shield] Mask verification failed: Image does not have Privora encryption mask. Skipping restoration.');
+            URL.revokeObjectURL(url);
+            resolve(null);
+            return;
+          }
+
+          // ONLY NOW show the Decrypting HUD because we are 100% certain this is an encrypted file!
+          showPrivoraHud({
+            type: 'decrypting',
+            title: 'Privora Shield · Auto-Decrypt',
+            subtitle: `Encrypted document detected! Decrypting & restoring clean original...`,
+            durationMs: 0
+          });
 
           for (const slice of matched.slices) {
             const sliceImg = new Image();
@@ -2510,34 +2647,7 @@
         }
 
         const candidateName = downloadAttr || (href.split('/').pop().split('?')[0]) || 'downloaded_image.png';
-        const candidate = candidateName.toLowerCase();
-        const candidateIsPan = candidate.includes('pan');
-        const candidateIsAadhaar = candidate.includes('aadhaar') || candidate.includes('adhar');
-
-        let matched = manifests.find(m => {
-          const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
-          const fBase = candidate.replace(/\.[^/.]+$/, '').toLowerCase();
-          return mBase && fBase && (fBase.includes(mBase) || mBase.includes(fBase));
-        });
-
-        if (!matched && (candidateIsPan || candidateIsAadhaar)) {
-          matched = manifests.find(m => {
-            const mFn = (m.fileName || '').toLowerCase();
-            return (candidateIsPan && mFn.includes('pan')) || (candidateIsAadhaar && (mFn.includes('aadhaar') || mFn.includes('adhar')));
-          });
-        }
-
-        if (!matched) {
-          const currentHost = (window.location.hostname || '').replace(/^www\./, '');
-          matched = manifests.find(m => {
-            const mHost = (m.hostname || '').replace(/^www\./, '');
-            return mHost && (mHost.includes(currentHost) || currentHost.includes(mHost));
-          });
-        }
-
-        if (!matched && manifests.length > 0 && Date.now() - manifests[0].timestamp < 2 * 60 * 60 * 1000) {
-          matched = manifests[0];
-        }
+        const matched = findMatchingManifest(manifests, candidateName);
 
         if (!matched || !matched.slices || matched.slices.length === 0) {
           resolve(false);
@@ -2548,13 +2658,6 @@
           e.preventDefault();
           e.stopImmediatePropagation();
         }
-
-        showPrivoraHud({
-          type: 'decrypting',
-          title: 'Privora Shield · Auto-Decrypt',
-          subtitle: `Encrypted photo from ${window.location.hostname || 'site'} detected! Decrypting & restoring clean original...`,
-          durationMs: 0
-        });
 
         try {
           let blob;
@@ -2623,7 +2726,7 @@
 
             resolve(true);
           } else {
-            console.warn('[Privora Shield] Auto-decryption found no matching slices, downloading file unmodified.');
+            console.log('[Privora Shield] Auto-decryption skipped (unencrypted or unmodified file). Proceeding with natural download.');
             target.dataset.aegisRestored = 'true';
             target.click();
             resolve(false);
@@ -2649,6 +2752,11 @@
   // Intercept Download Link & Button Clicks
   document.addEventListener('click', (e) => {
     if (e.target && e.target.dataset && e.target.dataset.aegisRestored === 'true') {
+      return;
+    }
+
+    // FAST GUARD: If current website has no recorded Privora encryptions, NEVER intercept!
+    if (!hasSiteEncryptedFiles()) {
       return;
     }
 
@@ -2702,6 +2810,10 @@
         return origClick.apply(this, arguments);
       }
 
+      if (!hasSiteEncryptedFiles()) {
+        return origClick.apply(this, arguments);
+      }
+
       const href = this.getAttribute('href') || this.href || '';
       const downloadAttr = this.getAttribute('download');
       const text = (this.innerText || this.textContent || '').toLowerCase();
@@ -2731,20 +2843,6 @@
 
       return origClick.apply(this, arguments);
     };
-  }
-
-  // Listen for background download notifications
-  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg && msg.type === 'PRIVORA_DOWNLOAD_MATCHED') {
-        showPrivoraHud({
-          type: 'decrypted',
-          title: 'Privora Shield · Download Verified',
-          subtitle: `Downloaded file "${msg.fileName}" verified against active encryption session. Restored seamlessly ✓`,
-          durationMs: 4000
-        });
-      }
-    });
   }
 
   // -------------------------------------------------------------

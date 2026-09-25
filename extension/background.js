@@ -73,7 +73,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Monitor Completed Downloads for Automatic Vault Matching & Tab Notification
+// Monitor Completed Downloads silently for audit logging if matched
 if (chrome.downloads && chrome.downloads.onChanged) {
   chrome.downloads.onChanged.addListener((delta) => {
     if (delta.state && delta.state.current === 'complete') {
@@ -87,20 +87,11 @@ if (chrome.downloads && chrome.downloads.onChanged) {
             const matched = manifests.find(m => {
               const mBase = (m.fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
               const fBase = fileName.replace(/\.[^/.]+$/, '').toLowerCase();
-              return mBase && (fBase.includes(mBase) || mBase.includes(fBase));
+              return mBase && fBase && (fBase.includes(mBase) || mBase.includes(fBase));
             });
 
             if (matched) {
               console.log('[Privora] Downloaded file matched with active encryption record:', matched.fileName);
-              chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                if (tabs && tabs[0] && tabs[0].id) {
-                  chrome.tabs.sendMessage(tabs[0].id, {
-                    type: 'PRIVORA_DOWNLOAD_MATCHED',
-                    fileName,
-                    manifest: matched,
-                  }).catch(() => {});
-                }
-              });
             }
           });
         }
