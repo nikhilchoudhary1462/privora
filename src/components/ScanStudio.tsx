@@ -119,7 +119,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
   const [canvasCursor, setCanvasCursor] = useState<string>('crosshair');
   const [sidePanelTab, setSidePanelTab] = useState<'uploads' | 'templates' | 'redaction' | 'synthetic' | 'ai' | 'export'>('uploads');
   const [isSidePanelOpen, setIsSidePanelOpen] = useState<boolean>(true);
-  const [emptyStageTab, setEmptyStageTab] = useState<'upload' | 'video' | '3d'>('upload');
+  const [emptyStageTab, setEmptyStageTab] = useState<'upload' | 'video' | '3d'>('video');
   const [isVideoModalOpen, setIsVideoModalOpen] = useState<boolean>(false);
 
   // Detect WebGPU hardware acceleration capabilities on mount
@@ -2683,18 +2683,22 @@ console.log("Starting secure daemon...");`;
                     </span>
                   </div>
                 ) : emptyStageTab === 'video' ? (
-                  <div className="relative w-full rounded-3xl overflow-hidden shadow-minimal border border-black/5 bg-black/95 aspect-video max-h-[380px] flex items-center justify-center group mx-auto">
+                  <div className="relative w-full rounded-3xl overflow-hidden shadow-minimal border border-black/5 bg-black aspect-video max-h-[420px] flex items-center justify-center group mx-auto">
                     <video
-                      src="/working.mp4"
                       controls
                       autoPlay
                       loop
                       muted
                       playsInline
+                      preload="auto"
+                      key="stage-working-video-v2"
                       className="w-full h-full object-contain rounded-3xl"
-                    />
+                    >
+                      <source src="/working.mp4?v=2" type="video/mp4" />
+                      Your browser does not support the video tag.
+                    </video>
                     <div className="absolute top-3 left-3 pointer-events-none">
-                      <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold bg-black/60 backdrop-blur-md text-white border border-white/20 flex items-center gap-1.5 shadow-minimal">
+                      <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold bg-black/70 backdrop-blur-md text-white border border-white/20 flex items-center gap-1.5 shadow-minimal">
                         <span className="w-2 h-2 rounded-full bg-[#4ADE80] animate-pulse" />
                         Privora In Action · On-Device Zero Egress
                       </span>
@@ -2824,11 +2828,15 @@ console.log("Starting secure daemon...");`;
 
             <div className="rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-black/10 shadow-inner">
               <video
-                src="/working.mp4"
                 controls
                 autoPlay
+                preload="auto"
+                key="modal-working-video-v2"
                 className="w-full h-full object-contain"
-              />
+              >
+                <source src="/working.mp4?v=2" type="video/mp4" />
+                Your browser does not support the video tag.
+              </video>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 pt-1 text-xs text-[#757575]">
