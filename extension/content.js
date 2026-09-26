@@ -437,10 +437,10 @@
     }
 
     // 10. Full Name & Demographic Identity
-    const nameRegex = /(?:(?:Name|Full Name|नाम|Customer Name|Holder Name|Candidate Name|Applicant Name)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
+    const nameRegex = /(?:(?:Name|Full Name|नाम|Customer Name|Holder Name|Candidate Name|Applicant Name)\s*(?:is\s+)?[:\-\/\s]\s*)([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})(?=\s|,|\n|\r|;|$)/gi;
     while ((match = nameRegex.exec(text)) !== null) {
       const val = match[1]?.trim();
-      if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender)$/i.test(val)) {
+      if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender|Mail|Email|Phone|No|Id)$/i.test(val)) {
         results.push({ type: 'NAME', label: 'Full Name / Demographic', value: val });
       }
     }
@@ -4165,6 +4165,9 @@
   const SYNTH_PERSONA_DOMAINS = ['sandbox.test', 'synthetic.org', 'demo-vault.internal', 'privacy-sandbox.net'];
 
   window._privoraTokenVault = window._privoraTokenVault || [];
+  // Session ID: unique per page load — old vault entries from other sessions are kept for
+  // clipboard/copy restoration but NOT rendered in the live DOM decryption scanner.
+  const _privoraSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
 
   function generateSyntheticTokenForFinding(finding, seedStr) {
     const seed = seedStr || (finding ? (finding.value || finding.type) : 'privora') + Date.now();
@@ -4243,19 +4246,22 @@
 
   function saveTokensToVault(newTokens) {
     if (!newTokens || newTokens.length === 0) return;
+    // Stamp each new token with the current session ID
+    const stamped = newTokens.map(t => ({ ...t, sessionId: _privoraSessionId }));
     const map = new Map();
     (window._privoraTokenVault || []).forEach(t => map.set(t.synthetic, t));
-    newTokens.forEach(t => map.set(t.synthetic, t));
+    stamped.forEach(t => map.set(t.synthetic, t));
     window._privoraTokenVault = Array.from(map.values()).slice(-200);
     syncVaultToDom();
 
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
         chrome.storage.local.set({ privora_token_vault: window._privoraTokenVault });
-        chrome.runtime.sendMessage({ type: 'STORE_TOKEN_VAULT', tokens: newTokens }, () => {});
+        chrome.runtime.sendMessage({ type: 'STORE_TOKEN_VAULT', tokens: stamped }, () => {});
       } catch (e) {}
     }
   }
+
 
   // Cross-tab storage synchronization listener
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
@@ -5005,7 +5011,8 @@
                                    (element.matches && element.matches('[data-message-author-role="assistant"], .markdown, .prose, .font-claude-message'));
       if (!isAssistantContainer) return;
 
-      const vault = window._privoraTokenVault || [];
+      // Only use tokens created in THIS page session to avoid showing stale values from old sessions
+      const vault = (window._privoraTokenVault || []).filter(t => t.sessionId === _privoraSessionId);
       if (vault.length === 0) return;
 
       const fullText = element.textContent || '';
@@ -5078,11 +5085,12 @@
     });
 
     setInterval(() => {
-      const vault = window._privoraTokenVault || [];
+      const vault = (window._privoraTokenVault || []).filter(t => t.sessionId === _privoraSessionId);
       if (vault.length === 0) return;
       const candidates = document.querySelectorAll('[data-message-author-role="assistant"], .markdown, .prose');
       candidates.forEach(c => decryptElementText(c));
     }, 1500);
+
   }
 
   // -------------------------------------------------------------
