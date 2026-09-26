@@ -78,10 +78,22 @@
       }
     }
 
-    // Strip any badge tag artifacts if somehow present
+    // Strip badge artifacts
     restored = restored.replace(/[\s\u00A0]*\uD83D\uDD12[\s\u00A0]*DECRYPTED/gi, '');
     restored = restored.replace(/[\s\u00A0]*\[\s*\uD83D\uDD12?\s*DECRYPTED\s*\]/gi, '');
     restored = restored.replace(/[\s\u00A0]*DECRYPTED/gi, '');
+
+    // Convert [text](mailto:email) → just email
+    restored = restored.replace(/\[([^\]]+)\]\(mailto:([^)]+)\)/g, '$2');
+    // Convert [text](url) → just text
+    restored = restored.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    // Strip markdown bold/italic: **text** → text, __text__ → text, *text* → text, _text_ → text
+    restored = restored.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');
+    restored = restored.replace(/___([^_]+)___/g, '$1');
+    restored = restored.replace(/\*\*([^*]+)\*\*/g, '$1');
+    restored = restored.replace(/__([^_]+)__/g, '$1');
+    restored = restored.replace(/\*([^*\n]+)\*/g, '$1');
+    restored = restored.replace(/_([^_\n]+)_/g, '$1');
 
     if (hits > 0) {
       try {
@@ -90,6 +102,7 @@
     }
     return restored;
   }
+
 
   // Hook navigator.clipboard.writeText (used by ChatGPT, Claude, etc. on Copy button click)
   if (navigator.clipboard && navigator.clipboard.writeText) {

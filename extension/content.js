@@ -324,12 +324,20 @@
     const results = [];
     if (!text || typeof text !== 'string') return results;
 
+    // Build a set of known synthetic values currently in the vault — skip detecting them as PII
+    // This prevents already-tokenized fields from being flagged and double-encrypted
+    const vaultSyntheticValues = new Set(
+      (window._privoraTokenVault || []).map(t => t.synthetic).filter(Boolean)
+    );
+    // Also skip synthetic email domains
+    const SYNTH_DOMAINS_RE = /\b\w+\.\d{3}@(sandbox\.test|synthetic\.org|demo-vault\.internal|privacy-sandbox\.net)\b/i;
+
     let match;
 
     // 1. PAN Card (case-insensitive search, validated uppercase)
     const panRegex = /\b([A-Za-z]{5}[0-9]{4}[A-Za-z]{1})\b/g;
     while ((match = panRegex.exec(text)) !== null) {
-      if (validatePAN(match[1])) {
+      if (validatePAN(match[1]) && !vaultSyntheticValues.has(match[1].toUpperCase())) {
         results.push({ type: 'PAN_CARD', label: 'PAN Card', value: match[1].toUpperCase() });
       }
     }
@@ -341,7 +349,7 @@
       const val = match[1]?.trim();
       if (!val) continue;
       const raw = val.replace(/[-\s\.]/g, '');
-      if (raw.length === 12 && !seenAadhaar.has(raw)) {
+      if (raw.length === 12 && !seenAadhaar.has(raw) && !vaultSyntheticValues.has(val)) {
         seenAadhaar.add(raw);
         const isVerhoeff = validateVerhoeff(raw);
         const isFormatted = /^[2-9]\d{3}[\s\-\.]+\d{4}[\s\-\.]+\d{4}$/.test(val);
@@ -363,7 +371,7 @@
     const seenCard = new Set();
     while ((match = cardRegex.exec(text)) !== null) {
       const raw = match[0].replace(/[-\s]/g, '');
-      if (!seenCard.has(raw)) {
+      if (!seenCard.has(raw) && !vaultSyntheticValues.has(match[0])) {
         seenCard.add(raw);
         if (validateLuhn(raw)) {
           results.push({ type: 'CREDIT_CARD', label: 'Payment Card', value: match[0] });
@@ -374,29 +382,33 @@
     // 4. SSN
     const ssnRegex = /\b(?!000|666|9\d{2})\d{3}[-\s](?!00)\d{2}[-\s](?!0000)\d{4}\b/g;
     while ((match = ssnRegex.exec(text)) !== null) {
-      if (validateSSN(match[0])) {
+      if (validateSSN(match[0]) && !vaultSyntheticValues.has(match[0])) {
         results.push({ type: 'SSN', label: 'US SSN', value: match[0] });
       }
     }
 
-    // 5. Email
+    // 5. Email — skip synthetic domain addresses already in vault
     const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
     while ((match = emailRegex.exec(text)) !== null) {
-      results.push({ type: 'EMAIL', label: 'Email Address', value: match[0] });
+      const emailVal = match[0];
+      if (!vaultSyntheticValues.has(emailVal) && !SYNTH_DOMAINS_RE.test(emailVal)) {
+        results.push({ type: 'EMAIL', label: 'Email Address', value: emailVal });
+      }
     }
 
     // 6. Phone (Supports +91 / international, with 5-5 grouping, 3-3-4 grouping, or continuous 10 digits)
     const phoneRegex = /(?:\+91[-\s]?)?\b[6-9]\d{4}[-\s]\d{5}\b|(?:\+91[-\s]?)?\b[6-9]\d{2}[-\s]\d{3}[-\s]\d{4}\b|(?:\+91[-\s]?)?\b[6-9]\d{9}\b|\b(?:\+?1[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}\b/g;
     while ((match = phoneRegex.exec(text)) !== null) {
-      if (validatePhone(match[0])) {
-        results.push({ type: 'PHONE', label: 'Phone Number', value: match[0].trim() });
+      const phoneVal = match[0].trim();
+      if (validatePhone(phoneVal) && !vaultSyntheticValues.has(phoneVal)) {
+        results.push({ type: 'PHONE', label: 'Phone Number', value: phoneVal });
       }
     }
 
     // 7. API Keys, Tokens & Secrets
     const apiKeyRegex = /(?:test_|demo_|live_|prod_)?sk[_-](?:proj[_-]|live[_-]|test[_-])?[a-zA-Z0-9_\-]{8,64}|AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{36}|(?:test_|demo_)?api[_-](?:key[_-]|secret[_-])?[a-zA-Z0-9_\-]{6,64}|(?:demo_|test_)?tok[_-][a-zA-Z0-9_\-]{8,64}|Bearer\s+[a-zA-Z0-9_\-\.]{16,}/gi;
     while ((match = apiKeyRegex.exec(text)) !== null) {
-      if (!results.some(r => r.value === match[0])) {
+      if (!results.some(r => r.value === match[0]) && !vaultSyntheticValues.has(match[0])) {
         results.push({ type: 'API_KEY', label: 'API Secret Key', value: match[0] });
       }
     }
@@ -405,7 +417,7 @@
     const labeledSecretRegex = /(?:(?:API\s*(?:Key|secret)|Access\s*Token|Secret\s*Key|Password|Auth\s*Token)(?:-like\s*value|\s*value|\s*secret)?\s*[:=\s]\s*)([^\s,;]+)/gi;
     while ((match = labeledSecretRegex.exec(text)) !== null) {
       const val = match[1]?.trim();
-      if (val && val.length >= 4 && !results.some(r => r.value === val)) {
+      if (val && val.length >= 4 && !results.some(r => r.value === val) && !vaultSyntheticValues.has(val)) {
         results.push({ type: 'API_KEY', label: 'Secret Credential / Token', value: val });
       }
     }
@@ -414,7 +426,7 @@
     const otpRegex = /(?:(?:OTP|One-Time\s*Password|Verification\s*Code)\s*[:\-\s=]\s*)([0-9]{4,8})\b/gi;
     while ((match = otpRegex.exec(text)) !== null) {
       const val = match[1]?.trim();
-      if (val && !results.some(r => r.value === val)) {
+      if (val && !results.some(r => r.value === val) && !vaultSyntheticValues.has(val)) {
         results.push({ type: 'API_KEY', label: 'One-Time Password (OTP)', value: val });
       }
     }
@@ -437,10 +449,12 @@
     }
 
     // 10. Full Name & Demographic Identity
+    // Requires each word to start with Uppercase — prevents capturing "is", "mail", "id" etc.
     const nameRegex = /(?:(?:Name|Full Name|नाम|Customer Name|Holder Name|Candidate Name|Applicant Name)\s*(?:is\s+)?[:\-\/\s]\s*)([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})(?=\s|,|\n|\r|;|$)/gi;
     while ((match = nameRegex.exec(text)) !== null) {
       const val = match[1]?.trim();
-      if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender|Mail|Email|Phone|No|Id)$/i.test(val)) {
+      if (val && val.length >= 3 && !vaultSyntheticValues.has(val) &&
+          !/^(DOB|Date|Year|Male|Female|Gender|Mail|Email|Phone|No|Id)$/i.test(val)) {
         results.push({ type: 'NAME', label: 'Full Name / Demographic', value: val });
       }
     }
@@ -449,7 +463,7 @@
     const guardianRegex = /(?:(?:Father's Name|Care of|C\/O|S\/O|D\/O|W\/O|पिता\s*का\s*नाम|पति\s*का\s*नाम)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
     while ((match = guardianRegex.exec(text)) !== null) {
       const val = match[1]?.trim();
-      if (val && val.length >= 3) {
+      if (val && val.length >= 3 && !vaultSyntheticValues.has(val)) {
         results.push({ type: 'NAME', label: 'Guardian / Relative Name', value: val });
       }
     }
@@ -499,10 +513,20 @@
       results.push({ type: 'DRIVING_LICENSE', label: 'Driving License Number', value: match[1] });
     }
 
-    return results;
+    // Deduplicate: remove any result whose value is already covered by an earlier result
+    const seen = new Set();
+    return results.filter(r => {
+      if (!r.value || seen.has(r.value)) return false;
+      seen.add(r.value);
+      return true;
+    });
   }
 
+
   // -------------------------------------------------------------
+  // 2. Cryptographic Helpers (SHA-256)
+  // -------------------------------------------------------------
+
   // 2. Cryptographic Helpers (SHA-256)
   // -------------------------------------------------------------
   async function computeSHA256(buffer) {
@@ -5121,10 +5145,21 @@
       }
     }
 
-    // Safety strip any badge text artifacts
+
+    // Strip badge artifacts
     restored = restored.replace(/[\s\u00A0]*\uD83D\uDD12[\s\u00A0]*DECRYPTED/gi, '');
     restored = restored.replace(/[\s\u00A0]*\[\s*\uD83D\uDD12?\s*DECRYPTED\s*\]/gi, '');
     restored = restored.replace(/[\s\u00A0]*DECRYPTED/gi, '');
+    // Convert [text](mailto:email) → email; [text](url) → text
+    restored = restored.replace(/\[([^\]]+)\]\(mailto:([^)]+)\)/g, '$2');
+    restored = restored.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    // Strip markdown bold/italic markers
+    restored = restored.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');
+    restored = restored.replace(/___([^_]+)___/g, '$1');
+    restored = restored.replace(/\*\*([^*]+)\*\*/g, '$1');
+    restored = restored.replace(/__([^_]+)__/g, '$1');
+    restored = restored.replace(/\*([^*\n]+)\*/g, '$1');
+    restored = restored.replace(/_([^_\n]+)_/g, '$1');
 
     if (hitCount > 0 || restored !== selection) {
       if (e.clipboardData) {
@@ -5172,9 +5207,20 @@
               }
             }
 
+
             restored = restored.replace(/[\s\u00A0]*\uD83D\uDD12[\s\u00A0]*DECRYPTED/gi, '');
             restored = restored.replace(/[\s\u00A0]*\[\s*\uD83D\uDD12?\s*DECRYPTED\s*\]/gi, '');
             restored = restored.replace(/[\s\u00A0]*DECRYPTED/gi, '');
+            // Convert [text](mailto:email) → email; [text](url) → text
+            restored = restored.replace(/\[([^\]]+)\]\(mailto:([^)]+)\)/g, '$2');
+            restored = restored.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+            // Strip markdown bold/italic markers
+            restored = restored.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');
+            restored = restored.replace(/___([^_]+)___/g, '$1');
+            restored = restored.replace(/\*\*([^*]+)\*\*/g, '$1');
+            restored = restored.replace(/__([^_]+)__/g, '$1');
+            restored = restored.replace(/\*([^*\n]+)\*/g, '$1');
+            restored = restored.replace(/_([^_\n]+)_/g, '$1');
 
             if (hits > 0 || restored !== text) {
               await navigator.clipboard.writeText(restored);
