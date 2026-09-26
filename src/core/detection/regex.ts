@@ -190,6 +190,38 @@ export class RegexDetector {
     return emailRegex.test(str.trim());
   }
 
+  public static readonly NAME_STOP_WORDS = new Set([
+    'is', 'am', 'are', 'was', 'were', 'my', 'me', 'i', 'only', 'just',
+    'email', 'mail', 'id', 'phone', 'mobile', 'contact', 'no', 'number', 'num',
+    'address', 'addr', 'dob', 'date', 'birth', 'gender', 'sex', 'male', 'female',
+    'order', 'ord', 'account', 'acc', 'card', 'pan', 'aadhaar', 'aadhar',
+    'father', 'mother', 'husband', 'guardian', 'parent', 'relation',
+    'student', 'roll', 'reg', 'registration', 'university', 'college', 'school',
+    'please', 'kindly', 'request', 'application', 'leave', 'cancel', 'cancellation',
+    'and', 'with', 'for', 'to', 'from', 'at', 'in', 'on', 'the', 'a', 'an'
+  ]);
+
+  public static extractCleanName(raw: string): string | null {
+    if (!raw || typeof raw !== 'string') return null;
+    const firstLine = raw.split(/[\r\n,;]/)[0];
+    const words = firstLine.trim().split(/\s+/);
+    while (words.length > 0 && RegexDetector.NAME_STOP_WORDS.has(words[0].toLowerCase().replace(/[^a-z]/g, ''))) {
+      words.shift();
+    }
+    const cleanWords: string[] = [];
+    for (const w of words) {
+      const lower = w.toLowerCase().replace(/[^a-z]/g, '');
+      if (!lower || RegexDetector.NAME_STOP_WORDS.has(lower)) {
+        break;
+      }
+      cleanWords.push(w.replace(/[^a-zA-Z]/g, ''));
+    }
+    if (cleanWords.length >= 1 && cleanWords.length <= 4) {
+      return cleanWords.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    }
+    return null;
+  }
+
   // Scan plain text and return all confirmed, validated PII items
   static scanText(text: string): DetectedItem[] {
     const results: DetectedItem[] = [];
@@ -454,9 +486,9 @@ export class RegexDetector {
     }
 
     // 12. Full Name & Demographic Identity
-    const nameRegex = /(?:(?:Name|Full Name|नाम|Customer Name|Holder Name|Candidate Name|Applicant Name)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
-    while ((match = nameRegex.exec(text)) !== null) {
-      const val = match[1]?.trim();
+    const namePrefixRegex = /(?:(?:my\s+)?(?:name|full\s*name|patient\s*name|customer\s*name|holder\s*name|candidate\s*name|applicant\s*name|नाम)\s*(?:is|[:=\-\/])*\s*|(?:i\s+am|i'm)\s+)([a-zA-Z \t\.]{2,60})/gi;
+    while ((match = namePrefixRegex.exec(text)) !== null) {
+      const val = RegexDetector.extractCleanName(match[1]);
       if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender)$/i.test(val)) {
         results.push({
           id: `pii_name_${idCounter++}`,
@@ -471,9 +503,9 @@ export class RegexDetector {
     }
 
     // 13. Guardian / Relative (Father's Name, Husband's Name, C/O, S/O, D/O, W/O)
-    const guardianRegex = /(?:(?:Father's Name|Care of|C\/O|S\/O|D\/O|W\/O|पिता\s*का\s*नाम|पति\s*का\s*नाम)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
-    while ((match = guardianRegex.exec(text)) !== null) {
-      const val = match[1]?.trim();
+    const guardianPrefixRegex = /(?:(?:father'?s\s*name|care\s*of|c\/o|s\/o|d\/o|w\/o|husband'?s\s*name|पिता\s*का\s*नाम|पति\s*का\s*नाम)\s*(?:is|[:=\-\/])*\s*)([a-zA-Z \t\.]{2,60})/gi;
+    while ((match = guardianPrefixRegex.exec(text)) !== null) {
+      const val = RegexDetector.extractCleanName(match[1]);
       if (val && val.length >= 3) {
         results.push({
           id: `pii_guardian_${idCounter++}`,

@@ -320,6 +320,48 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
+  const NAME_STOP_WORDS = new Set([
+    'is', 'am', 'are', 'was', 'were', 'my', 'me', 'i', 'only', 'just',
+    'email', 'mail', 'id', 'phone', 'mobile', 'contact', 'no', 'number', 'num',
+    'address', 'addr', 'dob', 'date', 'birth', 'gender', 'sex', 'male', 'female',
+    'order', 'ord', 'account', 'acc', 'card', 'pan', 'aadhaar', 'aadhar',
+    'father', 'mother', 'husband', 'guardian', 'parent', 'relation',
+    'student', 'roll', 'reg', 'registration', 'university', 'college', 'school',
+    'please', 'kindly', 'request', 'application', 'leave', 'cancel', 'cancellation',
+    'and', 'with', 'for', 'to', 'from', 'at', 'in', 'on', 'the', 'a', 'an'
+  ]);
+
+  function extractCleanName(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const firstLine = raw.split(/[\r\n,;]/)[0];
+    const words = firstLine.trim().split(/\s+/);
+    while (words.length > 0 && NAME_STOP_WORDS.has(words[0].toLowerCase().replace(/[^a-z]/g, ''))) {
+      words.shift();
+    }
+    const cleanWords = [];
+    for (const w of words) {
+      const lower = w.toLowerCase().replace(/[^a-z]/g, '');
+      if (!lower || NAME_STOP_WORDS.has(lower)) {
+        break;
+      }
+      cleanWords.push(w.replace(/[^a-zA-Z]/g, ''));
+    }
+    if (cleanWords.length >= 1 && cleanWords.length <= 4) {
+      return cleanWords.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    }
+    return null;
+  }
+
+  function sanitizeStoredNameToken(val) {
+    if (!val || typeof val !== 'string') return val;
+    const lower = val.toLowerCase();
+    if (lower.startsWith('is ') || lower.includes('email is') || lower.includes('mail id') || lower.includes('phone is') || lower.includes('only')) {
+      const cleaned = extractCleanName(val);
+      if (cleaned) return cleaned;
+    }
+    return val;
+  }
+
   function scanText(text) {
     const results = [];
     if (!text || typeof text !== 'string') return results;
@@ -449,10 +491,9 @@
     }
 
     // 10. Full Name & Demographic Identity
-    // Requires each word to start with Uppercase — prevents capturing "is", "mail", "id" etc.
-    const nameRegex = /(?:(?:Name|Full Name|नाम|Customer Name|Holder Name|Candidate Name|Applicant Name)\s*(?:is\s+)?[:\-\/\s]\s*)([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})(?=\s|,|\n|\r|;|$)/gi;
-    while ((match = nameRegex.exec(text)) !== null) {
-      const val = match[1]?.trim();
+    const namePrefixRegex = /(?:(?:my\s+)?(?:name|full\s*name|patient\s*name|customer\s*name|holder\s*name|candidate\s*name|applicant\s*name|नाम)\s*(?:is|[:=\-\/])*\s*|(?:i\s+am|i'm)\s+)([a-zA-Z \t\.]{2,60})/gi;
+    while ((match = namePrefixRegex.exec(text)) !== null) {
+      const val = extractCleanName(match[1]);
       if (val && val.length >= 3 && !vaultSyntheticValues.has(val) &&
           !/^(DOB|Date|Year|Male|Female|Gender|Mail|Email|Phone|No|Id)$/i.test(val)) {
         results.push({ type: 'NAME', label: 'Full Name / Demographic', value: val });
@@ -460,9 +501,9 @@
     }
 
     // 11. Guardian / Relative (Father's Name, Husband's Name, C/O, S/O, D/O, W/O)
-    const guardianRegex = /(?:(?:Father's Name|Care of|C\/O|S\/O|D\/O|W\/O|पिता\s*का\s*नाम|पति\s*का\s*नाम)\s*[:\-\/\s]\s*)([A-Z][a-zA-Z\s\.]{2,40})(?=[,\n\r;]|$)/gi;
-    while ((match = guardianRegex.exec(text)) !== null) {
-      const val = match[1]?.trim();
+    const guardianPrefixRegex = /(?:(?:father'?s\s*name|care\s*of|c\/o|s\/o|d\/o|w\/o|husband'?s\s*name|पिता\s*का\s*नाम|पति\s*का\s*नाम)\s*(?:is|[:=\-\/])*\s*)([a-zA-Z \t\.]{2,60})/gi;
+    while ((match = guardianPrefixRegex.exec(text)) !== null) {
+      const val = extractCleanName(match[1]);
       if (val && val.length >= 3 && !vaultSyntheticValues.has(val)) {
         results.push({ type: 'NAME', label: 'Guardian / Relative Name', value: val });
       }
@@ -4259,9 +4300,17 @@
           if (res && res.privora_token_vault && Array.isArray(res.privora_token_vault)) {
             const map = new Map();
             (window._privoraTokenVault || []).forEach(t => map.set(t.synthetic, t));
-            res.privora_token_vault.forEach(t => map.set(t.synthetic, t));
+            res.privora_token_vault.forEach(t => {
+              if (t.type === 'NAME' || (t.original && typeof t.original === 'string' && (t.original.toLowerCase().startsWith('is ') || t.original.toLowerCase().includes('email is')))) {
+                t.original = sanitizeStoredNameToken(t.original);
+              }
+              map.set(t.synthetic, t);
+            });
             window._privoraTokenVault = Array.from(map.values());
             syncVaultToDom();
+            try {
+              chrome.storage.local.set({ privora_token_vault: window._privoraTokenVault });
+            } catch (e) {}
           }
         });
       }
@@ -4270,8 +4319,14 @@
 
   function saveTokensToVault(newTokens) {
     if (!newTokens || newTokens.length === 0) return;
-    // Stamp each new token with the current session ID
-    const stamped = newTokens.map(t => ({ ...t, sessionId: _privoraSessionId }));
+    // Stamp each new token with the current session ID and sanitize name
+    const stamped = newTokens.map(t => {
+      let orig = t.original;
+      if (t.type === 'NAME' || (orig && typeof orig === 'string' && (orig.toLowerCase().startsWith('is ') || orig.toLowerCase().includes('email is')))) {
+        orig = sanitizeStoredNameToken(orig);
+      }
+      return { ...t, original: orig, sessionId: _privoraSessionId };
+    });
     const map = new Map();
     (window._privoraTokenVault || []).forEach(t => map.set(t.synthetic, t));
     stamped.forEach(t => map.set(t.synthetic, t));
@@ -5140,7 +5195,7 @@
     let hitCount = 0;
     for (const tok of vault) {
       if (tok.synthetic && restored.includes(tok.synthetic)) {
-        restored = restored.split(tok.synthetic).join(tok.original);
+        restored = restored.split(tok.synthetic).join(sanitizeStoredNameToken(tok.original));
         hitCount++;
       }
     }
@@ -5202,7 +5257,7 @@
             let hits = 0;
             for (const tok of vault) {
               if (tok.synthetic && restored.includes(tok.synthetic)) {
-                restored = restored.split(tok.synthetic).join(tok.original);
+                restored = restored.split(tok.synthetic).join(sanitizeStoredNameToken(tok.original));
                 hits++;
               }
             }

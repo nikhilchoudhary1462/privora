@@ -63,6 +63,23 @@
     return Array.isArray(vault) ? vault : [];
   }
 
+  function sanitizeNameToken(val) {
+    if (!val || typeof val !== 'string') return val;
+    const lower = val.toLowerCase();
+    if (lower.startsWith('is ') || lower.includes('email is') || lower.includes('mail id') || lower.includes('phone is') || lower.includes('only')) {
+      const words = val.split(/[\r\n,;]/)[0].trim().split(/\s+/);
+      const clean = [];
+      const stops = new Set(['is', 'email', 'mail', 'id', 'phone', 'mobile', 'no', 'number', 'only', 'just']);
+      for (const w of words) {
+        const l = w.toLowerCase().replace(/[^a-z]/g, '');
+        if (!l || stops.has(l)) continue;
+        clean.push(w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+      }
+      if (clean.length > 0) return clean.join(' ');
+    }
+    return val;
+  }
+
   function restoreTokensInText(text) {
     if (!text || typeof text !== 'string') return text;
     const vault = getVault();
@@ -72,7 +89,8 @@
     if (vault.length > 0) {
       for (const tok of vault) {
         if (tok && tok.synthetic && restored.includes(tok.synthetic)) {
-          restored = restored.split(tok.synthetic).join(tok.original);
+          const cleanOriginal = sanitizeNameToken(tok.original);
+          restored = restored.split(tok.synthetic).join(cleanOriginal);
           hits++;
         }
       }
