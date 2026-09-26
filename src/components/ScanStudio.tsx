@@ -46,7 +46,8 @@ import {
   PiiType,
   LocalAiHardwareInfo,
   LocalAiModelStatus,
-  ContextualPiiEntity
+  ContextualPiiEntity,
+  PdfPageResult
 } from '../types';
 import { MasterDetector } from '../core/detection';
 import { RegexDetector } from '../core/detection/regex';
@@ -139,14 +140,23 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
   // Handle page switching for multi-page documents (PDFs)
   const handlePageChange = (newIndex: number) => {
     if (!detection?.pages || newIndex < 0 || newIndex >= detection.pages.length) return;
+    const targetPage = detection.pages[newIndex];
     setCurrentPageIndex(newIndex);
-    setPreviewImageUrl(detection.pages[newIndex].pageImageDataUrl);
+    setPreviewImageUrl(targetPage.pageImageDataUrl);
     setSelectedItemId(null);
+    requestAnimationFrame(() => {
+      redrawCanvas(undefined, targetPage.pageImageDataUrl, newIndex);
+    });
   };
 
   // Render visual bounding boxes, handles & blur previews
-  const redrawCanvas = (modeOverride?: 'ORIGINAL' | 'BLURRED_REGIONS' | 'ENCRYPTED_MASK' | 'SYNTHETIC_DATA') => {
-    if (!previewImageUrl || !canvasRef.current) return;
+  const redrawCanvas = (
+    modeOverride?: 'ORIGINAL' | 'BLURRED_REGIONS' | 'ENCRYPTED_MASK' | 'SYNTHETIC_DATA',
+    imageUrlOverride?: string,
+    pageIndexOverride?: number
+  ) => {
+    const srcUrl = imageUrlOverride || previewImageUrl;
+    if (!srcUrl || !canvasRef.current) return;
 
     const currentMode = modeOverride || previewModeRef.current || previewMode;
     const canvas = canvasRef.current;
@@ -164,7 +174,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
       ctx.drawImage(img, 0, 0);
 
       if (!detection) return;
-      const targetPageNum = currentPageIndex + 1;
+      const targetPageNum = (pageIndexOverride !== undefined ? pageIndexOverride : currentPageIndex) + 1;
       const itemsToRender = detection.detectedItems.filter(
         i => !!i.boundingBox && (!i.pageNumber || !detection.pages || detection.pages.length <= 1 || i.pageNumber === targetPageNum)
       );
@@ -278,7 +288,7 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
     };
 
     img.onload = render;
-    img.src = previewImageUrl;
+    img.src = srcUrl;
     if (img.complete && img.naturalWidth > 0) {
       render();
     }
@@ -851,7 +861,44 @@ export const ScanStudio: React.FC<ScanStudioProps> = ({
                 : PdfProcessor.exportMultiPagePdf(restoredPages);
 
               const decUrl = URL.createObjectURL(fullPdf);
-              setPreviewImageUrl(restoredPages[0].canvas.toDataURL('image/jpeg', 0.85));
+
+              const restoredPdfPages: PdfPageResult[] = restoredPages.map((rp, idx) => ({
+                pageNumber: idx + 1,
+                pageImageDataUrl: rp.canvas.toDataURL('image/jpeg', 0.85),
+                pageDimensions: { width: rp.width, height: rp.height },
+                extractedText: '',
+                detectedItems: (matchedRecord.encryptedRegions || [])
+                  .filter(r => (r.pageNumber === idx + 1 || (!r.pageNumber && idx === 0)))
+                  .map((r, rIdx) => ({
+                    id: `dec_${idx}_${rIdx}`,
+                    type: r.type || 'NAME',
+                    label: r.box?.label || (r.type === 'FACE' ? 'Face Photo' : r.type === 'AADHAAR' ? 'Aadhaar Card' : 'Decrypted Region'),
+                    value: 'Decrypted',
+                    confidence: 1.0,
+                    complianceTags: ['DPDP_INDIA', 'GDPR'] as any,
+                    recommendation: 'Restored from secure local envelope vault.',
+                    boundingBox: r.box,
+                    pageNumber: idx + 1,
+                  })),
+              }));
+
+              setCurrentPageIndex(0);
+              setPreviewImageUrl(restoredPdfPages[0].pageImageDataUrl);
+              setDetection({
+                fileId: matchedRecord.id,
+                fileName: matchedRecord.fileName,
+                fileSize: fullPdf.size,
+                fileHash: uploadedHash || matchedRecord.encryptedHash,
+                fileType: 'application/pdf',
+                detectedItems: restoredPdfPages.flatMap(p => p.detectedItems),
+                pages: restoredPdfPages,
+                totalPages: restoredPdfPages.length,
+                previewDataUrl: restoredPdfPages[0].pageImageDataUrl,
+                exif: { hasGps: false },
+                extractedText: '',
+                scanDurationMs: 0,
+              });
+
               setLastEncryptedFile({
                 downloadUrl: decUrl,
                 fileName: `restored_${matchedRecord.fileName.replace(/\.[^/.]+$/, '')}.pdf`,
@@ -2598,25 +2645,27 @@ console.log("Starting secure daemon...");`;
                   type="button"
                   disabled={currentPageIndex === 0}
                   onClick={() => handlePageChange(currentPageIndex - 1)}
-                  className="px-2 py-0.5 text-xs font-bold rounded-full text-[#757575] hover:text-[#212529] disabled:opacity-30"
+                  className="px-2 py-0.5 text-xs font-bold rounded-full text-[#757575] hover:text-[#212529] disabled:opacity-30 cursor-pointer"
                 >
                   ◀
                 </button>
                 <span className="text-xs font-bold text-[#212529] font-mono px-1 flex items-center gap-1.5">
                   <span>Page {currentPageIndex + 1} / {detection.pages.length}</span>
-                  {detection.detectedItems.some(i => (i.pageNumber === currentPageIndex + 1 || (!i.pageNumber && currentPageIndex === 0)) && !!i.boundingBox) ? (
-                    <span className="text-[10px] bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded-full font-bold">
-                      🔒 Masked
+                  {detection.detectedItems.some(i => (i.pageNumber === currentPageIndex + 1 || (!i.pageNumber && currentPageIndex === 0)) && (!!i.boundingBox || i.confidence > 0.5)) ? (
+                    <span className="text-[10px] bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                      🔒 Page Encrypted
                     </span>
                   ) : (
-                    <span className="text-[10px] text-[#9ca3af]">✓ Clean</span>
+                    <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                      🛡️ Page Safe
+                    </span>
                   )}
                 </span>
                 <button
                   type="button"
                   disabled={currentPageIndex === detection.pages.length - 1}
                   onClick={() => handlePageChange(currentPageIndex + 1)}
-                  className="px-2 py-0.5 text-xs font-bold rounded-full text-[#757575] hover:text-[#212529] disabled:opacity-30"
+                  className="px-2 py-0.5 text-xs font-bold rounded-full text-[#757575] hover:text-[#212529] disabled:opacity-30 cursor-pointer"
                 >
                   ▶
                 </button>
@@ -2693,16 +2742,17 @@ console.log("Starting secure daemon...");`;
               </div>
             ) : previewImageUrl ? (
               <div className="space-y-3 w-full flex flex-col items-center">
-                {/* PDF Page Strip with Highlighted Encryption Status */}
+                {/* PDF Page Strip with Clear Safe vs Encrypted Status */}
                 {detection?.pages && detection.pages.length > 1 && (
-                  <div className="w-full max-w-2xl px-3 py-2 bg-white/95 backdrop-blur border border-black/8 rounded-2xl flex flex-wrap items-center justify-between gap-2 shadow-minimal">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[11px] font-bold text-[#757575] font-mono uppercase tracking-wider mr-1">
-                        PDF Pages:
+                  <div className="w-full max-w-2xl px-4 py-2.5 bg-white/95 backdrop-blur border border-black/8 rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-minimal">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] font-bold text-[#757575] font-mono uppercase tracking-wider mr-1 flex items-center gap-1">
+                        <span>📄</span>
+                        <span>PDF Pages ({detection.pages.length}):</span>
                       </span>
                       {detection.pages.map((p, pIdx) => {
                         const count = detection.detectedItems.filter(
-                          i => (i.pageNumber === p.pageNumber || (!i.pageNumber && p.pageNumber === 1)) && !!i.boundingBox
+                          i => (i.pageNumber === p.pageNumber || (!i.pageNumber && p.pageNumber === 1)) && (!!i.boundingBox || i.confidence > 0.5)
                         ).length;
                         const isEncrypted = count > 0;
                         const isCurrent = currentPageIndex === pIdx;
@@ -2711,31 +2761,40 @@ console.log("Starting secure daemon...");`;
                             key={p.pageNumber}
                             type="button"
                             onClick={() => handlePageChange(pIdx)}
-                            className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all ${
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer ${
                               isCurrent
                                 ? 'bg-[#212529] text-white shadow-minimal ring-2 ring-[#9C8DD4]'
                                 : isEncrypted
                                 ? 'bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] hover:bg-[#D1FAE5]'
-                                : 'bg-[#FAF9F6] text-[#757575] border border-black/5 hover:border-black/20'
+                                : 'bg-[#FAF9F6] text-[#4b5563] border border-black/5 hover:border-black/20 hover:bg-white'
                             }`}
-                            title={`Switch to Page ${p.pageNumber} (${isEncrypted ? `${count} items encrypted` : 'Clean page'})`}
+                            title={`Switch to Page ${p.pageNumber} (${isEncrypted ? `${count} sensitive item(s) encrypted` : 'No sensitive data - Safe page'})`}
                           >
                             <span>Page {p.pageNumber}</span>
                             {isEncrypted ? (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#047857] text-white font-extrabold flex items-center gap-0.5">
-                                🔒 {count}
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-extrabold flex items-center gap-0.5 ${
+                                isCurrent ? 'bg-[#047857] text-white' : 'bg-[#047857] text-white'
+                              }`}>
+                                🔒 {count} Encrypted
                               </span>
                             ) : (
-                              <span className="text-[10px] text-[#9ca3af]">✓ Clean</span>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold flex items-center gap-0.5 ${
+                                isCurrent ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              }`}>
+                                🛡️ Safe
+                              </span>
                             )}
                           </button>
                         );
                       })}
                     </div>
-                    <div className="text-[11px] font-mono text-[#757575] flex items-center gap-1">
-                      <span>Encrypted:</span>
+                    <div className="text-[11px] font-mono text-[#757575] flex items-center gap-1.5 shrink-0">
                       <span className="font-bold text-[#047857]">
-                        {detection.pages.filter(p => detection.detectedItems.some(i => (i.pageNumber === p.pageNumber || (!i.pageNumber && p.pageNumber === 1)) && !!i.boundingBox)).length} / {detection.pages.length} Pages
+                        {detection.pages.filter(p => detection.detectedItems.some(i => (i.pageNumber === p.pageNumber || (!i.pageNumber && p.pageNumber === 1)) && (!!i.boundingBox || i.confidence > 0.5))).length} Encrypted
+                      </span>
+                      <span>·</span>
+                      <span className="font-bold text-[#4b5563]">
+                        {detection.pages.filter(p => !detection.detectedItems.some(i => (i.pageNumber === p.pageNumber || (!i.pageNumber && p.pageNumber === 1)) && (!!i.boundingBox || i.confidence > 0.5))).length} Safe
                       </span>
                     </div>
                   </div>

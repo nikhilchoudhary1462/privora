@@ -1595,6 +1595,54 @@ export const VaultView: React.FC<VaultViewProps> = ({
               </div>
             </div>
 
+            {/* Multi-Page PDF Page Status Strip */}
+            {selectedFileForMemoryView.record.pdfPages && selectedFileForMemoryView.record.pdfPages.length > 1 && (
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-2 shadow-sm">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[11px] font-bold text-slate-500 font-mono uppercase tracking-wider mr-1 flex items-center gap-1">
+                    <span>📄</span>
+                    <span>PDF Pages ({selectedFileForMemoryView.record.pdfPages.length}):</span>
+                  </span>
+                  {selectedFileForMemoryView.record.pdfPages.map((p) => {
+                    const encCount = (selectedFileForMemoryView.record.encryptedRegions || []).filter(
+                      r => (r.pageNumber === p.pageNumber || (!r.pageNumber && p.pageNumber === 1))
+                    ).length;
+                    const isEncrypted = encCount > 0;
+                    return (
+                      <div
+                        key={p.pageNumber}
+                        className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono font-bold ${
+                          isEncrypted
+                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
+                            : 'bg-white text-slate-600 border border-slate-200'
+                        }`}
+                      >
+                        <span>Page {p.pageNumber}</span>
+                        {isEncrypted ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-700 text-white font-extrabold flex items-center gap-0.5">
+                            🔒 {encCount} Encrypted
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-emerald-600 font-bold flex items-center gap-0.5">
+                            🛡️ Safe
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] font-mono text-slate-500 flex items-center gap-1.5">
+                  <span className="font-bold text-emerald-700">
+                    {selectedFileForMemoryView.record.pdfPages.filter(p => (selectedFileForMemoryView.record.encryptedRegions || []).some(r => (r.pageNumber === p.pageNumber || (!r.pageNumber && p.pageNumber === 1)))).length} Encrypted
+                  </span>
+                  <span>·</span>
+                  <span className="font-bold text-slate-600">
+                    {selectedFileForMemoryView.record.pdfPages.filter(p => !(selectedFileForMemoryView.record.encryptedRegions || []).some(r => (r.pageNumber === p.pageNumber || (!r.pageNumber && p.pageNumber === 1)))).length} Safe
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="p-2 rounded-xl bg-slate-900 border border-slate-200 max-h-[480px] overflow-auto flex items-center justify-center">
               {selectedFileForMemoryView.decryptedPdfUrl || selectedFileForMemoryView.maskedPdfUrl ? (
                 <iframe
@@ -1731,6 +1779,54 @@ export const VaultView: React.FC<VaultViewProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Multi-Page PDF Page Status Strip */}
+            {restoredResult.record?.pdfPages && restoredResult.record.pdfPages.length > 1 && (
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-2 shadow-sm">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[11px] font-bold text-slate-500 font-mono uppercase tracking-wider mr-1 flex items-center gap-1">
+                    <span>📄</span>
+                    <span>PDF Pages ({restoredResult.record.pdfPages.length}):</span>
+                  </span>
+                  {restoredResult.record.pdfPages.map((p) => {
+                    const encCount = (restoredResult.record?.encryptedRegions || []).filter(
+                      r => (r.pageNumber === p.pageNumber || (!r.pageNumber && p.pageNumber === 1))
+                    ).length;
+                    const wasEncrypted = encCount > 0;
+                    return (
+                      <div
+                        key={p.pageNumber}
+                        className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono font-bold ${
+                          wasEncrypted
+                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
+                            : 'bg-white text-slate-600 border border-slate-200'
+                        }`}
+                      >
+                        <span>Page {p.pageNumber}</span>
+                        {wasEncrypted ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-700 text-white font-extrabold flex items-center gap-0.5">
+                            🔒 {encCount} Restored
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-emerald-600 font-bold flex items-center gap-0.5">
+                            🛡️ Safe
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] font-mono text-slate-500 flex items-center gap-1.5">
+                  <span className="font-bold text-emerald-700">
+                    {restoredResult.record.pdfPages.filter(p => (restoredResult.record?.encryptedRegions || []).some(r => (r.pageNumber === p.pageNumber || (!r.pageNumber && p.pageNumber === 1)))).length} Restored
+                  </span>
+                  <span>·</span>
+                  <span className="font-bold text-slate-600">
+                    {restoredResult.record.pdfPages.filter(p => !(restoredResult.record?.encryptedRegions || []).some(r => (r.pageNumber === p.pageNumber || (!r.pageNumber && p.pageNumber === 1)))).length} Safe
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="p-2 rounded-xl bg-slate-900 border border-slate-200 max-h-[480px] overflow-auto flex items-center justify-center">
               {restoredResult.isPdf ? (
