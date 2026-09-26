@@ -362,6 +362,20 @@
     return val;
   }
 
+  function safeReplaceToken(targetText, findVal, replaceVal) {
+    if (!targetText || !findVal) return targetText;
+    if (targetText.includes(findVal)) {
+      return targetText.split(findVal).join(replaceVal);
+    }
+    try {
+      const esc = findVal.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&').replace(/\s+/g, '\\s+');
+      const rx = new RegExp(esc, 'gi');
+      return targetText.replace(rx, replaceVal);
+    } catch (e) {
+      return targetText;
+    }
+  }
+
   function scanText(text) {
     const results = [];
     if (!text || typeof text !== 'string') return results;
@@ -4483,7 +4497,7 @@
         const newTokens = [];
         hits.forEach(h => {
           const syn = generateSyntheticTokenForFinding(h);
-          tokenized = tokenized.split(h.value).join(syn);
+          tokenized = safeReplaceToken(tokenized, h.value, syn);
           newTokens.push({
             id: 'tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
             type: h.type,
@@ -4511,7 +4525,7 @@
         let redacted = originalText;
         hits.forEach(h => {
           const mask = '█'.repeat(Math.min(h.value.length, 8));
-          redacted = redacted.split(h.value).join(`[REDACTED: ${h.type} ${mask}]`);
+          redacted = safeReplaceToken(redacted, h.value, `[REDACTED: ${h.type} ${mask}]`);
         });
         insertText(redacted);
         showToast('Privora: Masked sensitive text before inserting into webpage.');
@@ -4670,7 +4684,7 @@
         const newTokens = [];
         hits.forEach(h => {
           const syn = generateSyntheticTokenForFinding(h);
-          tokenized = tokenized.split(h.value).join(syn);
+          tokenized = safeReplaceToken(tokenized, h.value, syn);
           newTokens.push({
             id: 'tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
             type: h.type,
@@ -4697,7 +4711,7 @@
       let redacted = originalText;
       hits.forEach(h => {
         const mask = '█'.repeat(Math.min(h.value.length, 8));
-        redacted = redacted.split(h.value).join(`[REDACTED: ${h.type} ${mask}]`);
+        redacted = safeReplaceToken(redacted, h.value, `[REDACTED: ${h.type} ${mask}]`);
       });
       insertText(redacted);
       overlay.remove();
@@ -4876,7 +4890,7 @@
           const newTokens = [];
           hits.forEach(h => {
             const syn = generateSyntheticTokenForFinding(h);
-            tokenized = tokenized.split(h.value).join(syn);
+            tokenized = safeReplaceToken(tokenized, h.value, syn);
             newTokens.push({
               id: 'tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
               type: h.type,
@@ -4928,7 +4942,7 @@
           let redacted = currentText;
           hits.forEach(h => {
             const mask = '█'.repeat(Math.min(h.value.length, 8));
-            redacted = redacted.split(h.value).join(`[REDACTED: ${h.type} ${mask}]`);
+            redacted = safeReplaceToken(redacted, h.value, `[REDACTED: ${h.type} ${mask}]`);
           });
 
           const hostInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ? target : (target.closest ? target.closest('input, textarea') : null);
