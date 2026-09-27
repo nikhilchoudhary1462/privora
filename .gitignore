@@ -22,6 +22,7 @@ build/
 # Testing & coverage
 coverage/
 .vitest/
+*.traineddata
 
 # OS / Editor files
 .DS_Store

@@ -124,8 +124,8 @@ export class OcrEngine {
       console.warn('OCR execution skipped or timed out:', e);
     }
 
-    // Run hardened RegexDetector on extracted text
-    const detectedPii = RegexDetector.scanText(extractedText);
+    // Run hardened RegexDetector on extracted text (with candidate card support for image OCR)
+    const detectedPii = RegexDetector.scanText(extractedText, { allowCandidateCards: true });
 
     // Levenshtein distance helper for bounded fuzzy matching
     const levenshtein = (s1: string, s2: string): number => {
@@ -274,6 +274,55 @@ export class OcrEngine {
         }
       }
 
+      // Special Matcher B2: Payment Cards (Exact or Bounded Digit-Stream within Spatially Coherent Lines)
+      else if (item.type === 'CREDIT_CARD') {
+        const targetDigits = item.value.replace(/\D/g, '');
+        if (targetDigits.length >= 13) {
+          for (const line of lines) {
+            let lineDigits = '';
+            const digitToBoxMap: OcrWordBox[] = [];
+
+            for (const wb of line.boxes) {
+              const normalizedWb = wb.text
+                .replace(/[Oo]/g, '0')
+                .replace(/[Il|]/g, '1')
+                .replace(/[Bb]/g, '8')
+                .replace(/[Ss]/g, '5')
+                .replace(/[Zz]/g, '2')
+                .replace(/%/g, '4');
+              const wbDigits = normalizedWb.replace(/\D/g, '');
+              for (let d = 0; d < wbDigits.length; d++) {
+                lineDigits += wbDigits[d];
+                digitToBoxMap.push(wb);
+              }
+            }
+
+            const matchIndex = lineDigits.indexOf(targetDigits);
+            if (matchIndex !== -1) {
+              const matchedSet = new Set<OcrWordBox>();
+              for (let k = matchIndex; k < Math.min(digitToBoxMap.length, matchIndex + targetDigits.length); k++) {
+                matchedSet.add(digitToBoxMap[k]);
+              }
+              bestMatchBoxes = Array.from(matchedSet);
+              break;
+            } else if (lineDigits.length >= targetDigits.length && targetDigits.length >= 15) {
+              for (let s = 0; s <= lineDigits.length - targetDigits.length; s++) {
+                const sub = lineDigits.slice(s, s + targetDigits.length);
+                if (levenshtein(sub, targetDigits) <= 2) {
+                  const matchedSet = new Set<OcrWordBox>();
+                  for (let k = s; k < s + targetDigits.length; k++) {
+                    matchedSet.add(digitToBoxMap[k]);
+                  }
+                  bestMatchBoxes = Array.from(matchedSet);
+                  break;
+                }
+              }
+              if (bestMatchBoxes) break;
+            }
+          }
+        }
+      }
+
       // General Matcher C: Multi-Token PII (DOB, Cards, Phones, Passports, SSN, Emails)
       if (!bestMatchBoxes) {
         const piiVal = item.value.trim();
@@ -374,6 +423,56 @@ export class OcrEngine {
             y: Math.round(origHeight * 0.62),
             width: Math.round(origWidth * 0.46),
             height: Math.max(20, Math.round(origHeight * 0.07)),
+            label: `${item.label}: ${item.value}`,
+            isNormalized: false,
+            boxConfidence: 'ESTIMATED',
+          };
+        } else if (item.type === 'CREDIT_CARD') {
+          estBox = {
+            x: Math.round(origWidth * 0.08),
+            y: Math.round(origHeight * 0.52),
+            width: Math.round(origWidth * 0.84),
+            height: Math.max(24, Math.round(origHeight * 0.14)),
+            label: `${item.label}: ${item.value}`,
+            isNormalized: false,
+            boxConfidence: 'ESTIMATED',
+          };
+        } else if (item.type === 'DRIVING_LICENSE') {
+          estBox = {
+            x: Math.round(origWidth * 0.35),
+            y: Math.round(origHeight * 0.32),
+            width: Math.round(origWidth * 0.58),
+            height: Math.max(22, Math.round(origHeight * 0.15)),
+            label: `${item.label}: ${item.value}`,
+            isNormalized: false,
+            boxConfidence: 'ESTIMATED',
+          };
+        } else if (item.type === 'GOVERNMENT_ID') {
+          estBox = {
+            x: Math.round(origWidth * 0.35),
+            y: Math.round(origHeight * 0.44),
+            width: Math.round(origWidth * 0.45),
+            height: Math.max(20, Math.round(origHeight * 0.10)),
+            label: `${item.label}: ${item.value}`,
+            isNormalized: false,
+            boxConfidence: 'ESTIMATED',
+          };
+        } else if (item.type === 'NAME') {
+          estBox = {
+            x: Math.round(origWidth * 0.35),
+            y: Math.round(origHeight * 0.20),
+            width: Math.round(origWidth * 0.45),
+            height: Math.max(18, Math.round(origHeight * 0.08)),
+            label: `${item.label}: ${item.value}`,
+            isNormalized: false,
+            boxConfidence: 'ESTIMATED',
+          };
+        } else if (item.type === 'ADDRESS') {
+          estBox = {
+            x: Math.round(origWidth * 0.35),
+            y: Math.round(origHeight * 0.38),
+            width: Math.round(origWidth * 0.58),
+            height: Math.max(24, Math.round(origHeight * 0.22)),
             label: `${item.label}: ${item.value}`,
             isNormalized: false,
             boxConfidence: 'ESTIMATED',

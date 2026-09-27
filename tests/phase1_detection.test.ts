@@ -418,6 +418,70 @@ describe('Phase 1: Zero-Network & Privacy Architecture Check', () => {
       // Ensure OTP 482913 is NOT classified as ADDRESS
       expect(detected.some(d => d.value === '482913' && d.type === 'ADDRESS')).toBe(false);
     });
+
+    it('should detect payment card candidates and expiry dates even on specimen cards', () => {
+      const cardText = `
+        visa Platinum
+        4000 1234 5678 9010
+        valid thru: 12/20
+        Cardholder Name: EISHA KHANNA
+      `;
+      const detected = RegexDetector.scanText(cardText);
+      const cards = detected.filter(d => d.type === 'CREDIT_CARD');
+      expect(cards.length).toBeGreaterThanOrEqual(2);
+      expect(cards.some(d => d.value.includes('4000 1234 5678 9010'))).toBe(true);
+      expect(cards.some(d => d.value === '12/20')).toBe(true);
+      const names = detected.filter(d => d.type === 'NAME');
+      expect(names.some(d => d.value.includes('Eisha Khanna'))).toBe(true);
+    });
+
+    it('should detect International Driver Documents and Barcodes', () => {
+      const licenseText = `
+        INTERNATIONAL DRIVER’S DOCUMENT
+        LICENCIA DE CONDUCIR INTERNACIONAL
+        PERMIS DE CONDUIRE INTERNATIONAL
+        FULL NAME AND RESIDENCE:
+        GEORGE MARTINEZ
+        80 PEARL STREET SUITE #345
+        BROOKLYN, NY 11201 UNITED STATES
+        DOB: OCT 23 1982
+        Barcode: 40119 72191
+      `;
+      const detected = RegexDetector.scanText(licenseText);
+      expect(detected.some(d => d.type === 'NAME' && d.value.includes('George Martinez'))).toBe(true);
+      expect(detected.some(d => d.type === 'ADDRESS' && d.value.includes('80 PEARL STREET'))).toBe(true);
+      expect(detected.some(d => d.type === 'DOB' && d.value.includes('OCT 23 1982'))).toBe(true);
+      expect(detected.some(d => d.type === 'GOVERNMENT_ID' && d.value.includes('40119 72191'))).toBe(true);
+    });
+
+    it('should detect US Permanent Resident Green Cards and USCIS numbers', () => {
+      const greenCardText = `
+        UNITED STATES OF AMERICA
+        PERMANENT RESIDENT
+        Surname: TOMPKINS
+        Given Name: TIMOTHY
+        USCIS# 000-000-000
+        Country of Birth: Ireland
+        Card Expires: 11/12/30
+      `;
+      const detected = RegexDetector.scanText(greenCardText);
+      expect(detected.some(d => d.type === 'GOVERNMENT_ID' && d.value === '000-000-000')).toBe(true);
+      const names = detected.filter(d => d.type === 'NAME');
+      expect(names.some(d => d.value.includes('Tompkins'))).toBe(true);
+      expect(names.some(d => d.value.includes('Timothy'))).toBe(true);
+    });
+
+    it('should verify extension content.js contains multi-document classifiers', () => {
+      const contentJsPath = path.resolve(__dirname, '../extension/content.js');
+      const contentJs = fs.readFileSync(contentJsPath, 'utf8');
+
+      expect(contentJs).toContain('isExplicitCard');
+      expect(contentJs).toContain('isExplicitLicense');
+      expect(contentJs).toContain('isExplicitGreenCard');
+      expect(contentJs).toContain('License Barcode');
+      expect(contentJs).toContain('Fingerprint Biometric');
+    });
   });
 });
+
 

@@ -223,7 +223,7 @@ export class RegexDetector {
   }
 
   // Scan plain text and return all confirmed, validated PII items
-  static scanText(text: string): DetectedItem[] {
+  static scanText(text: string, options?: { allowCandidateCards?: boolean }): DetectedItem[] {
     const results: DetectedItem[] = [];
     if (!text || typeof text !== 'string') return results;
 
@@ -277,11 +277,15 @@ export class RegexDetector {
       }
     }
 
-    // 3. Credit / Debit Cards (Visa, Mastercard, Amex, RuPay)
+    // 3. Credit / Debit Cards (Visa, Mastercard, Amex, RuPay, Discover)
     const cardRegex = /\b(?:\d{4}[-\s]?){3}\d{1,4}\b|\b\d{4}[-\s]?\d{6}[-\s]?\d{5}\b|\b\d{13,19}\b/g;
+    const seenCards = new Set<string>();
     while ((match = cardRegex.exec(text)) !== null) {
       const digits = match[0].replace(/[-\s]/g, '');
-      if (this.validateLuhn(digits)) {
+      if (seenCards.has(digits)) continue;
+      seenCards.add(digits);
+      const isLuhnValid = this.validateLuhn(digits);
+      if (isLuhnValid) {
         results.push({
           id: `pii_card_${idCounter++}`,
           type: 'CREDIT_CARD',
@@ -290,6 +294,53 @@ export class RegexDetector {
           confidence: 0.98,
           complianceTags: ['PCI_DSS', 'GDPR', 'DPDP_INDIA'],
           recommendation: 'PCI-DSS strictly prohibits storing unencrypted Primary Account Numbers (PAN).',
+        });
+      } else if (
+        (options?.allowCandidateCards || /\b(?:visa\s*platinum|mastercard\s*gold|specimen|sample\s*card)\b/i.test(text)) &&
+        (digits.length === 16 || digits.length === 15)
+      ) {
+        results.push({
+          id: `pii_card_${idCounter++}`,
+          type: 'CREDIT_CARD',
+          label: 'Payment Card Number (Candidate)',
+          value: match[0],
+          confidence: 0.88,
+          complianceTags: ['PCI_DSS', 'GDPR', 'DPDP_INDIA'],
+          recommendation: 'Payment card candidate number. PCI-DSS strictly prohibits storing unencrypted Primary Account Numbers.',
+        });
+      }
+    }
+
+    // 3b. Card Expiry & Security Data
+    const cardExpRegex = /(?:valid\s*(?:thru|to)|expires(?:\s*end)?|exp(?:\s*date)?|card\s*expires)\s*[:\/\-\s]*([0-1]?\d[\/\-][2-3]\d)\b/gi;
+    while ((match = cardExpRegex.exec(text)) !== null) {
+      const expVal = match[1]?.trim();
+      if (expVal && !results.some(r => r.value === expVal)) {
+        results.push({
+          id: `pii_card_exp_${idCounter++}`,
+          type: 'CREDIT_CARD',
+          label: 'Card Expiration Date',
+          value: expVal,
+          confidence: 0.92,
+          complianceTags: ['PCI_DSS'],
+          recommendation: 'Card expiration security parameter.',
+        });
+      }
+    }
+
+    // 3c. USCIS / Alien Registration Number (Permanent Resident / Green Card)
+    const uscisRegex = /(?:USCIS\s*#?|USCIS\s*Number|Alien\s*Registration\s*#?|A#)\s*[:\-\s]*([0-9]{3}[-\s]?[0-9]{3}[-\s]?[0-9]{3}|[0-9]{9})\b/gi;
+    while ((match = uscisRegex.exec(text)) !== null) {
+      const uscisVal = match[1]?.trim();
+      if (uscisVal && !results.some(r => r.value === uscisVal)) {
+        results.push({
+          id: `pii_uscis_${idCounter++}`,
+          type: 'GOVERNMENT_ID',
+          label: 'USCIS Number / Green Card ID',
+          value: uscisVal,
+          confidence: 0.98,
+          complianceTags: ['IDENTITY_THEFT_PREVENTION', 'GDPR'],
+          recommendation: 'Permanent Resident Alien Registration / USCIS credential.',
         });
       }
     }
@@ -486,10 +537,10 @@ export class RegexDetector {
     }
 
     // 12. Full Name & Demographic Identity
-    const namePrefixRegex = /(?:(?:my\s+)?(?:name|full\s*name|patient\s*name|customer\s*name|holder\s*name|candidate\s*name|applicant\s*name|नाम)\s*(?:is|[:=\-\/])*\s*|(?:i\s+am|i'm)\s+)([a-zA-Z \t\.]{2,60})/gi;
+    const namePrefixRegex = /(?:(?:my\s+)?(?:full\s*name\s*and\s*residence|name\s*and\s*residence|cardholder\s*name|cardholder|name\s*on\s*card|patient\s*name|customer\s*name|candidate\s*name|applicant\s*name|holder\s*name|full\s*name|surname|given\s*name|name|नाम)\s*(?:is|[:=\-\/])*\s*|(?:i\s+am|i'm)\s+)([a-zA-Z \t\.]{2,60})/gi;
     while ((match = namePrefixRegex.exec(text)) !== null) {
       const val = RegexDetector.extractCleanName(match[1]);
-      if (val && val.length >= 3 && !/^(DOB|Date|Year|Male|Female|Gender)$/i.test(val)) {
+      if (val && val.length >= 2 && !/^(DOB|Date|Year|Male|Female|Gender|Country|Category|Expires|Valid)$/i.test(val)) {
         results.push({
           id: `pii_name_${idCounter++}`,
           type: 'NAME',
@@ -534,7 +585,7 @@ export class RegexDetector {
     }
 
     // 15. Residential Address & PIN Code
-    const addressRegex = /(?:(?:Address|Residential Address|Residing at|पता)\s*[:\-\/\s]\s*)([A-Za-z0-9\s,\-\/\.]{6,60})(?=[;\n\r]|(?:PIN|Phone|Email|City|State|DOB|Name|Account|Total|Synthetic)|$)/gi;
+    const addressRegex = /(?:(?:Address|Residential\s*Address|Residence|Residing\s*at|पता)\s*[:\-\/\s]\s*)([A-Za-z0-9\s,\-\/\.]{6,60})(?=[;\n\r]|(?:PIN|Phone|Email|City|State|DOB|Name|Account|Total|Synthetic|DOB|Country)|$)/gi;
     while ((match = addressRegex.exec(text)) !== null) {
       const addrVal = match[1]?.trim();
       if (addrVal && addrVal.length >= 8) {
@@ -546,6 +597,23 @@ export class RegexDetector {
           confidence: 0.91,
           complianceTags: ['DPDP_INDIA', 'GDPR'],
           recommendation: 'Physical address revealing exact residence location.',
+        });
+      }
+    }
+
+    // 15b. Formatted Street Address (e.g. "80 Pearl Street Suite #345", "123 Main St, New York")
+    const streetAddressRegex = /\b(\d{1,5}\s+[A-Za-z0-9\.\s]{2,30}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Way|Court|Ct|Suite|Ste)\b[^\n\r]{0,45})/gi;
+    while ((match = streetAddressRegex.exec(text)) !== null) {
+      const addrVal = match[1]?.trim();
+      if (addrVal && addrVal.length >= 8 && !results.some(r => r.value === addrVal)) {
+        results.push({
+          id: `pii_street_address_${idCounter++}`,
+          type: 'ADDRESS',
+          label: 'Residential Street Address',
+          value: addrVal,
+          confidence: 0.92,
+          complianceTags: ['DPDP_INDIA', 'GDPR'],
+          recommendation: 'Physical street address revealing residence location.',
         });
       }
     }
@@ -618,6 +686,23 @@ export class RegexDetector {
         complianceTags: ['DPDP_INDIA', 'IDENTITY_THEFT_PREVENTION'],
         recommendation: 'Motor vehicle driving license document.',
       });
+    }
+
+    // 17b. Document Barcode Tracking Identifier (Permits & Driver IDs)
+    const dlBarcodeRegex = /\b([0-9]{5}\s+[0-9]{5})\b/g;
+    while ((match = dlBarcodeRegex.exec(text)) !== null) {
+      const barVal = match[1]?.trim();
+      if (barVal && !results.some(r => r.value === barVal)) {
+        results.push({
+          id: `pii_barcode_${idCounter++}`,
+          type: 'GOVERNMENT_ID',
+          label: 'Document Barcode Identifier',
+          value: barVal,
+          confidence: 0.90,
+          complianceTags: ['IDENTITY_THEFT_PREVENTION'],
+          recommendation: 'Machine-readable document barcode tracking number.',
+        });
+      }
     }
 
     // 18. Contextual Migration, Tracking, and Record IDs (Label-Anchored)

@@ -1092,6 +1092,9 @@
 
     const isPan = fn.includes('pan');
     const isAadhaar = fn.includes('aadhaar') || fn.includes('adhar') || fn.includes('uid');
+    const isCard = fn.includes('card') || fn.includes('credit') || fn.includes('debit') || fn.includes('visa') || fn.includes('master') || fn.includes('amex') || fn.includes('platinum') || fn.includes('payment') || fn.includes('rupay') || fn.includes('silver') || fn.includes('gold');
+    const isLicense = fn.includes('driver') || fn.includes('licen') || fn.includes('permis') || fn.includes('conducir') || fn.includes('conduire') || fn.includes('dl') || fn.includes('driving');
+    const isGreenCard = fn.includes('green') || fn.includes('resident') || fn.includes('permanent') || fn.includes('uscis') || fn.includes('alien') || fn.includes('greencard');
 
     try {
       const scale = Math.min(1, 240 / Math.max(w, h));
@@ -1225,8 +1228,164 @@
       const hasSaffronHeader = saffronPixels > 10;
       const hasPanBlueHeader = blueHeaderPixels > 30;
 
-      // C. Document Classification
-      const isExplicitPan = isPan || (!isAadhaar && !hasQrCode && (hasPanBlueHeader || (skinRight > skinLeft + 25 && skinRight > 30)));
+      // C. Barcode Scan on Bottom Region (Driver's License / International Permits)
+      let barcodeTransitions = 0;
+      const bcStartX = Math.round(cardLeft + (cardRight - cardLeft) * 0.32);
+      const bcEndX = Math.round(cardLeft + (cardRight - cardLeft) * 0.68);
+      const bcStartY = Math.round(cardTop + (cardBottom - cardTop) * 0.72);
+      const bcEndY = Math.round(cardTop + (cardBottom - cardTop) * 0.94);
+      for (let y = bcStartY; y < bcEndY; y += 2) {
+        let prevDark = false;
+        for (let x = bcStartX; x < bcEndX; x++) {
+          const i = (y * sw + x) * 4;
+          const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          const isDark = lum < 100;
+          if (isDark !== prevDark) {
+            barcodeTransitions++;
+            prevDark = isDark;
+          }
+        }
+      }
+      const hasBarcode = barcodeTransitions > 30;
+
+      // D. EMV Chip Metallic Contacts Scan (Credit / Debit Cards)
+      let chipPixels = 0;
+      const chipStartX = Math.round(cardLeft + (cardRight - cardLeft) * 0.12);
+      const chipEndX = Math.round(cardLeft + (cardRight - cardLeft) * 0.30);
+      const chipStartY = Math.round(cardTop + (cardBottom - cardTop) * 0.30);
+      const chipEndY = Math.round(cardTop + (cardBottom - cardTop) * 0.58);
+      for (let y = chipStartY; y < chipEndY; y++) {
+        for (let x = chipStartX; x < chipEndX; x++) {
+          const i = (y * sw + x) * 4;
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if ((r > 130 && g > 95 && b < 90 && (r - b > 30)) || (r > 150 && g > 150 && b > 130 && Math.abs(r - g) < 20)) {
+            chipPixels++;
+          }
+        }
+      }
+      const hasEmvChip = chipPixels > 8;
+
+      const hasFaceLeft = (skinLeft > 15 && (maxYLeft - minYLeft) > 10);
+      const hasFaceRight = (skinRight > 15 && (maxYRight - minYRight) > 10);
+      const hasFace = hasFaceLeft || hasFaceRight;
+      const docAspectRatio = cardW / cardH;
+
+      // E. Document Classification
+      const isExplicitCard = isCard || (!isPan && !isAadhaar && !hasFace && (hasEmvChip || (docAspectRatio >= 1.35 && docAspectRatio <= 1.85)));
+      const isExplicitPan = isPan || (!isAadhaar && !isExplicitCard && !hasQrCode && (hasPanBlueHeader || (skinRight > skinLeft + 25 && skinRight > 30)));
+      const isExplicitGreenCard = isGreenCard || (!isPan && !isAadhaar && !isExplicitCard && hasFaceLeft && (fn.includes('green') || fn.includes('resident') || fn.includes('uscis')));
+      const isExplicitLicense = isLicense || (!isPan && !isAadhaar && !isExplicitCard && hasFaceLeft && (hasBarcode || fn.includes('driver') || fn.includes('licen') || fn.includes('permis') || (!hasQrCode && !hasSaffronHeader)));
+
+      if (isExplicitCard) {
+        // --- PAYMENT / CREDIT / DEBIT CARD PROTECTION ---
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.06),
+          y: cardY + Math.round(cardH * 0.50),
+          width: Math.round(cardW * 0.88),
+          height: Math.round(cardH * 0.16),
+          label: 'Card Number'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.32),
+          y: cardY + Math.round(cardH * 0.68),
+          width: Math.round(cardW * 0.36),
+          height: Math.round(cardH * 0.11),
+          label: 'Card Expiry'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.06),
+          y: cardY + Math.round(cardH * 0.80),
+          width: Math.round(cardW * 0.58),
+          height: Math.round(cardH * 0.12),
+          label: 'Cardholder Name'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.12),
+          y: cardY + Math.round(cardH * 0.32),
+          width: Math.round(cardW * 0.18),
+          height: Math.round(cardH * 0.18),
+          label: 'EMV Chip'
+        });
+
+        return boxes;
+      }
+
+      if (isExplicitGreenCard) {
+        // --- US PERMANENT RESIDENT (GREEN CARD) PROTECTION ---
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.02),
+          y: cardY + Math.round(cardH * 0.30),
+          width: Math.round(cardW * 0.30),
+          height: Math.round(cardH * 0.58),
+          label: 'Face Photo'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.35),
+          y: cardY + Math.round(cardH * 0.18),
+          width: Math.round(cardW * 0.38),
+          height: Math.round(cardH * 0.24),
+          label: 'Legal Name'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.35),
+          y: cardY + Math.round(cardH * 0.44),
+          width: Math.round(cardW * 0.32),
+          height: Math.round(cardH * 0.13),
+          label: 'USCIS Number'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.76),
+          y: cardY + Math.round(cardH * 0.62),
+          width: Math.round(cardW * 0.22),
+          height: Math.round(cardH * 0.30),
+          label: 'Fingerprint Biometric'
+        });
+
+        return boxes;
+      }
+
+      if (isExplicitLicense) {
+        // --- DRIVER'S LICENSE / INTERNATIONAL PERMIT PROTECTION ---
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.02),
+          y: cardY + Math.round(cardH * 0.26),
+          width: Math.round(cardW * 0.30),
+          height: Math.round(cardH * 0.62),
+          label: 'Face Photo'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.34),
+          y: cardY + Math.round(cardH * 0.30),
+          width: Math.round(cardW * 0.58),
+          height: Math.round(cardH * 0.42),
+          label: 'Name & Residence'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.34),
+          y: cardY + Math.round(cardH * 0.75),
+          width: Math.round(cardW * 0.32),
+          height: Math.round(cardH * 0.17),
+          label: 'License Barcode'
+        });
+
+        boxes.push({
+          x: cardX + Math.round(cardW * 0.68),
+          y: cardY + Math.round(cardH * 0.75),
+          width: Math.round(cardW * 0.28),
+          height: Math.round(cardH * 0.17),
+          label: 'Signature'
+        });
+
+        return boxes;
+      }
 
       if (isExplicitPan) {
         // --- PAN CARD PROTECTION: PHOTO + PAN NUMBER ---
@@ -1324,6 +1483,29 @@
       return boxes;
     } catch (err) {
       console.warn('[Privora] Auto-shield region detection error:', err);
+      if (isCard) {
+        return [
+          { x: Math.round(w * 0.06), y: Math.round(h * 0.50), width: Math.round(w * 0.88), height: Math.round(h * 0.16), label: 'Card Number' },
+          { x: Math.round(w * 0.32), y: Math.round(h * 0.68), width: Math.round(w * 0.36), height: Math.round(h * 0.11), label: 'Card Expiry' },
+          { x: Math.round(w * 0.06), y: Math.round(h * 0.80), width: Math.round(w * 0.58), height: Math.round(h * 0.12), label: 'Cardholder Name' }
+        ];
+      }
+      if (isLicense) {
+        return [
+          { x: Math.round(w * 0.02), y: Math.round(h * 0.26), width: Math.round(w * 0.30), height: Math.round(h * 0.62), label: 'Face Photo' },
+          { x: Math.round(w * 0.34), y: Math.round(h * 0.30), width: Math.round(w * 0.58), height: Math.round(h * 0.42), label: 'Name & Residence' },
+          { x: Math.round(w * 0.34), y: Math.round(h * 0.75), width: Math.round(w * 0.32), height: Math.round(h * 0.17), label: 'License Barcode' },
+          { x: Math.round(w * 0.68), y: Math.round(h * 0.75), width: Math.round(w * 0.28), height: Math.round(h * 0.17), label: 'Signature' }
+        ];
+      }
+      if (isGreenCard) {
+        return [
+          { x: Math.round(w * 0.02), y: Math.round(h * 0.30), width: Math.round(w * 0.30), height: Math.round(h * 0.58), label: 'Face Photo' },
+          { x: Math.round(w * 0.35), y: Math.round(h * 0.18), width: Math.round(w * 0.38), height: Math.round(h * 0.24), label: 'Legal Name' },
+          { x: Math.round(w * 0.35), y: Math.round(h * 0.44), width: Math.round(w * 0.32), height: Math.round(h * 0.13), label: 'USCIS Number' },
+          { x: Math.round(w * 0.76), y: Math.round(h * 0.62), width: Math.round(w * 0.22), height: Math.round(h * 0.30), label: 'Fingerprint Biometric' }
+        ];
+      }
       if (isPan) {
         return [
           { x: Math.round(w * 0.68), y: Math.round(h * 0.32), width: Math.round(w * 0.26), height: Math.round(h * 0.48), label: 'Face Photo' },
